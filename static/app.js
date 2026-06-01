@@ -1214,7 +1214,7 @@ async function changeMyPassword(){
     ME.must_change_password=false;
   }catch(e){err.textContent=e.message;err.style.display='';}
 }
-$('btnSendInvite').addEventListener('click',function(){
+$('btnSendInvite').addEventListener('click',async function(){
   const d=window._inviteData;if(!d)return;
   const appUrl=window.location.origin;
   const appName=document.title;

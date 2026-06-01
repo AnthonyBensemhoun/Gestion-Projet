@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ app_name }} — Connexion</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="login-body">
+<div class="login-card">
+  <div class="login-logo">
+    {% if app_logo %}<img src="{{ app_logo }}" alt="logo">{% else %}{{ app_name[0]|upper }}{% endif %}
+  </div>
+  <h1>{{ app_name }}</h1>
+  <p class="sub">Gestion de projet collaborative</p>
+  {% if request.query_params.get("error") %}
+  <div class="login-error">Identifiants incorrects.</div>
+  {% endif %}
+  <form method="post" action="/login">
+    <div class="field">
+      <label>Email</label>
+      <input type="email" name="email" required autofocus>
+    </div>
+    <div class="field">
+      <label>Mot de passe</label>
+      <input type="password" name="password" required>
+    </div>
+    <button type="submit" class="btn primary" style="width:100%;margin-top:8px">Se connecter</button>
+  </form>
+  <p class="login-hint">L'administrateur t'a transmis tes identifiants.</p>
+</div>
+</body>
+</html>

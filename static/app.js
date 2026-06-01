@@ -856,37 +856,137 @@ document.addEventListener('click',e=>{
     $('notifDropdown')?.classList.add('hidden');
 },{capture:true});
 
+/* ====== Modèle de charge intelligent (D2) ======
+   Au lieu de compter bêtement les tâches, on estime l'EFFORT RESTANT (heures),
+   pondéré par l'urgence (échéance), comparé à la CAPACITÉ DISPONIBLE réelle
+   (jours ouvrés à venir moins les absences). */
+const CAP_CONFIG = {
+  weeklyHours: 35,                 // capacité hebdomadaire par personne
+  horizonDays: 14,                 // fenêtre "charge imminente" (2 semaines)
+  prioHours: { h: 8, m: 4, l: 2 }, // effort par défaut (h) si pas d'estimation
+  urgency: { overdue: 1.5, d3: 1.3, d7: 1.15, normal: 1.0 } // multiplicateur de pression
+};
+const HOURS_PER_DAY = CAP_CONFIG.weeklyHours / 5;
+
+// Effort restant d'une tâche, en heures (utilise l'estimation si dispo, sinon défaut par priorité)
+function taskRemainingHours(t){
+  if(t.status==='done') return 0;
+  let base = (t.estimated_hours && t.estimated_hours>0) ? t.estimated_hours : (CAP_CONFIG.prioHours[t.priority]||4);
+  const prog = Math.min(100, Math.max(0, t.progress||0));
+  return base * (1 - prog/100);
+}
+// Multiplicateur d'urgence selon l'échéance
+function taskUrgencyWeight(t){
+  if(!t.due_date) return CAP_CONFIG.urgency.normal;
+  const d = daysBetween(today(), t.due_date);
+  if(d<0)  return CAP_CONFIG.urgency.overdue;
+  if(d<=3) return CAP_CONFIG.urgency.d3;
+  if(d<=7) return CAP_CONFIG.urgency.d7;
+  return CAP_CONFIG.urgency.normal;
+}
+// Heures disponibles d'une personne sur l'horizon (jours ouvrés - absences)
+function availableHoursInHorizon(userId){
+  let workdays=0;
+  const start=new Date();
+  for(let i=0;i<CAP_CONFIG.horizonDays;i++){
+    const dt=new Date(start.getTime()+i*864e5);
+    const dow=dt.getDay();
+    if(dow===0||dow===6) continue; // week-end
+    const ds=dt.toISOString().slice(0,10);
+    const absent=state.absences.some(a=>a.user_id===userId && a.from_date<=ds && a.to_date>=ds);
+    if(!absent) workdays++;
+  }
+  return workdays*HOURS_PER_DAY;
+}
+// Calcule la charge d'une personne (optionnellement filtrée sur un projet)
+function computeUserLoad(userId, projectId){
+  let tasks=state.tasks.filter(t=>t.assignee_id===userId && t.status!=='done');
+  if(projectId) tasks=tasks.filter(t=>t.project_id==projectId);
+  let imminentHours=0, backlogHours=0, lateCount=0;
+  tasks.forEach(t=>{
+    const rem=taskRemainingHours(t);
+    backlogHours+=rem;
+    if(isLate(t)) lateCount++;
+    if(t.due_date){
+      const d=daysBetween(today(), t.due_date);
+      if(d<=CAP_CONFIG.horizonDays) imminentHours += rem*taskUrgencyWeight(t);
+    }
+  });
+  const avail=availableHoursInHorizon(userId);
+  const pct = avail>0 ? Math.round(imminentHours/avail*100) : (imminentHours>0?200:0);
+  return {tasks, imminentHours, backlogHours, avail, pct, lateCount};
+}
+function loadClass(pct){ return pct>110?'over':pct>=85?'warn':'ok'; }
+function loadLabel(pct){
+  if(pct>110) return {txt:'Surchargé', col:'var(--bad)'};
+  if(pct>=85) return {txt:'Chargé', col:'var(--warn)'};
+  if(pct>=45) return {txt:'Optimal', col:'var(--ok)'};
+  return {txt:'Disponible', col:'var(--ok)'};
+}
+function fmtH(h){ return (Math.round(h*10)/10).toString().replace('.0','')+' h'; }
+
 /* ====== Vue Capacité (D2) ====== */
 function renderCapacity(){
   const el=$('capacityBoard');if(!el)return;
   if(!state.users.length){el.innerHTML='<div class="empty">Aucun membre.</div>';return;}
-  const MAX_TASKS=8;
-  el.innerHTML='<div class="grid cards">'+state.users.map(u=>{
-    const active=state.tasks.filter(t=>t.assignee_id===u.id&&t.status!=='done');
-    const late=active.filter(isLate).length;
-    const soon=active.filter(t=>!isLate(t)&&t.due_date&&daysBetween(today(),t.due_date)<=3&&daysBetween(today(),t.due_date)>=0).length;
-    const pct=Math.min(100,Math.round(active.length/MAX_TASKS*100));
-    const cls=pct>=100?'over':pct>=75?'warn':'ok';
+
+  const legend=`<div class="panel" style="padding:12px 14px;margin-bottom:16px;font-size:12px;color:var(--mut)">
+    <strong style="color:var(--text)">📊 Charge intelligente</strong> — basée sur l'effort restant (estimation en heures, ou défaut selon priorité : haute 8h, moyenne 4h, basse 2h),
+    pondéré par l'urgence des échéances, comparé à la capacité réelle disponible sur ${CAP_CONFIG.horizonDays} jours (jours ouvrés − absences, base ${CAP_CONFIG.weeklyHours}h/sem).
+    <span style="margin-left:8px"><span class="cal-legend-dot" style="background:var(--ok)"></span> Disponible/Optimal</span>
+    <span style="margin-left:8px"><span class="cal-legend-dot" style="background:var(--warn)"></span> Chargé (≥85%)</span>
+    <span style="margin-left:8px"><span class="cal-legend-dot" style="background:var(--bad)"></span> Surchargé (>110%)</span>
+  </div>`;
+
+  const cards=state.users.map(u=>{
+    const L=computeUserLoad(u.id);
     const absent=isAbsentNow(u.id);
-    const upcomingByWeek={};
-    active.forEach(t=>{if(!t.due_date)return;const w=t.due_date.slice(0,7);upcomingByWeek[w]=(upcomingByWeek[w]||0)+1;});
-    const weekRows=Object.entries(upcomingByWeek).sort().slice(0,4)
-      .map(([m,n])=>`<span class="capacity-week">${m} : ${n} tâche(s)</span>`).join('');
+    const cls=loadClass(L.pct);
+    const lbl=loadLabel(L.pct);
+    const barW=Math.min(100, L.pct);
+
+    // Répartition par projet
+    const byProj={};
+    L.tasks.forEach(t=>{ byProj[t.project_id]=(byProj[t.project_id]||0)+taskRemainingHours(t); });
+    const projRows=Object.entries(byProj)
+      .sort((a,b)=>b[1]-a[1])
+      .map(([pid,hrs])=>{
+        const p=projById(pid);
+        const share=L.backlogHours>0?Math.round(hrs/L.backlogHours*100):0;
+        return `<div style="margin-top:7px">
+          <div class="row" style="justify-content:space-between;font-size:12px">
+            <span>${esc(p?p.name:'Projet '+pid)}</span>
+            <span style="color:var(--mut)">${fmtH(hrs)} · ${share}%</span>
+          </div>
+          <div class="capacity-bar-wrap" style="height:6px;margin-top:2px"><div class="capacity-bar-fill ok" style="width:${share}%;background:${avaColor(p?p.id:pid)}"></div></div>
+        </div>`;
+      }).join('');
+
     return `<div class="capacity-card">
       <div class="capacity-header">
         <div class="ava" style="background:${avaColor(u.id)}">${initials(u.name)}</div>
         <div style="flex:1">
           <div style="font-weight:700;font-size:15px">${esc(u.name)}${absent?'<span class="pill absent" style="margin-left:8px">Absent</span>':''}</div>
-          <div style="font-size:12px;color:var(--mut)">${active.length} tâche(s) active(s) · ${late?'<span style="color:var(--bad)">'+late+' en retard</span>':soon?'<span style="color:var(--warn)">'+soon+' à venir</span>':'<span style="color:var(--ok)">Tout OK</span>'}</div>
+          <div style="font-size:12px;color:var(--mut)">${L.tasks.length} tâche(s) · ${L.lateCount?'<span style="color:var(--bad)">'+L.lateCount+' en retard</span>':'<span style="color:var(--ok)">À jour</span>'}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-family:Fraunces,serif;font-size:22px;font-weight:900;color:${lbl.col};line-height:1">${L.pct}%</div>
+          <div style="font-size:11px;font-weight:700;color:${lbl.col}">${lbl.txt}</div>
         </div>
       </div>
-      <div class="row" style="align-items:center;gap:10px;margin-bottom:6px">
-        <div class="capacity-bar-wrap"><div class="capacity-bar-fill ${cls}" style="width:${pct}%"></div></div>
-        <span style="font-size:12px;font-weight:700;color:${cls==='over'?'var(--bad)':cls==='warn'?'var(--warn)':'var(--ok)'}">${pct}%</span>
+      <div class="capacity-bar-wrap" style="margin-bottom:6px"><div class="capacity-bar-fill ${cls}" style="width:${barW}%"></div></div>
+      <div class="row" style="justify-content:space-between;font-size:12px;color:var(--mut)">
+        <span>Imminent : <strong style="color:var(--text)">${fmtH(L.imminentHours)}</strong> / ${fmtH(L.avail)} dispo</span>
+        <span>Total restant : <strong style="color:var(--text)">${fmtH(L.backlogHours)}</strong></span>
       </div>
-      ${weekRows?`<div class="row" style="gap:8px;flex-wrap:wrap;margin-top:6px">${weekRows}</div>`:''}
+      ${projRows?`<div style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">
+        <div style="font-size:11px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Par projet</div>
+        ${projRows}
+      </div>`:''}
     </div>`;
-  }).join('')+'</div>';
+  }).join('');
+
+  el.innerHTML=legend+'<div class="grid cards">'+cards+'</div>';
 }
 
 /* ====== Dashboard Charts (D1) ====== */
@@ -900,14 +1000,20 @@ function renderDashCharts(){
     const counts={todo:ts.filter(t=>t.status==='todo').length,prog:ts.filter(t=>t.status==='prog').length,done:ts.filter(t=>t.status==='done').length};
     chartStatus=new Chart(canvStatus,{type:'doughnut',data:{labels:['À faire','En cours','Terminé'],datasets:[{data:[counts.todo,counts.prog,counts.done],backgroundColor:['#8a8478','#2f7fd6','#2e9e5b'],borderWidth:0}]},options:{plugins:{legend:{position:'bottom',labels:{boxWidth:12,font:{size:11}}}},cutout:'70%',responsive:true,maintainAspectRatio:false}});
   }
-  // Graphique charge par personne
+  // Graphique charge par personne — modèle intelligent (heures imminentes vs capacité dispo)
   const canvAssign=$('chartAssignee');
   if(canvAssign && state.users.length){
     if(chartAssignee){chartAssignee.destroy();}
     const labels=state.users.map(u=>u.name.split(' ')[0]);
-    const dataActive=state.users.map(u=>state.tasks.filter(t=>t.assignee_id===u.id&&t.status!=='done').length);
-    const dataLate=state.users.map(u=>state.tasks.filter(t=>t.assignee_id===u.id&&isLate(t)).length);
-    chartAssignee=new Chart(canvAssign,{type:'bar',data:{labels,datasets:[{label:'Actives',data:dataActive,backgroundColor:'rgba(47,127,214,.7)',borderRadius:4},{label:'En retard',data:dataLate,backgroundColor:'rgba(214,56,63,.7)',borderRadius:4}]},options:{plugins:{legend:{position:'bottom',labels:{boxWidth:12,font:{size:11}}}},scales:{y:{beginAtZero:true,ticks:{stepSize:1}}},responsive:true,maintainAspectRatio:false}});
+    const loads=state.users.map(u=>computeUserLoad(u.id));
+    const dataImminent=loads.map(L=>Math.round(L.imminentHours*10)/10);
+    const dataAvail=loads.map(L=>Math.round(L.avail*10)/10);
+    // Couleur de la barre charge selon surcharge
+    const colorsImminent=loads.map(L=>L.pct>110?'rgba(214,56,63,.8)':L.pct>=85?'rgba(243,167,18,.85)':'rgba(46,158,91,.8)');
+    chartAssignee=new Chart(canvAssign,{type:'bar',data:{labels,datasets:[
+      {label:'Charge imminente (h)',data:dataImminent,backgroundColor:colorsImminent,borderRadius:4},
+      {label:'Capacité dispo (h)',data:dataAvail,backgroundColor:'rgba(138,132,120,.25)',borderRadius:4}
+    ]},options:{plugins:{legend:{position:'bottom',labels:{boxWidth:12,font:{size:11}}},tooltip:{callbacks:{afterBody:(items)=>{const i=items[0].dataIndex;return 'Charge : '+loads[i].pct+'%';}}}},scales:{y:{beginAtZero:true,title:{display:true,text:'heures'}}},responsive:true,maintainAspectRatio:false}});
   }
 }
 

@@ -42,6 +42,7 @@
   <div class="tab" data-tab="kanban">⠿ Kanban</div>
   <div class="tab" data-tab="cal">📅 Calendrier</div>
   <div class="tab" data-tab="list">📋 Liste</div>
+  <div class="tab" data-tab="docs">📄 Documents</div>
   <div class="tab" data-tab="capacity">💪 Capacité</div>
   {% if is_admin %}<div class="tab" data-tab="audit">🔍 Audit</div>{% endif %}
 </nav>
@@ -168,6 +169,17 @@
     </div>
     <div id="kanbanBoard"></div>
   </section>
+
+  <section id="sec-docs" class="hidden">
+    <div class="sec-h">
+      <h2>📄 Documents qualité</h2>
+      <button class="btn primary" id="btnAddDoc">+ Ajouter un document</button>
+    </div>
+    <div class="meta" style="margin-bottom:14px;font-size:13px">
+      Verrouille un document pour l'éditer, télécharge-le, modifie-le dans Word, puis ré-uploade une nouvelle version. L'historique complet est conservé.
+    </div>
+    <div id="docsList" class="grid cards"></div>
+  </section>
 </main>
 
 <!-- MODALES -->
@@ -293,6 +305,29 @@ window.CURRENT_USER = {
     <button class="btn primary" id="btnChangePw">Valider</button>
   </div>
 </div></div>
+<!-- Modale : créer un document -->
+<div class="modal-bg" id="docCreateModal"><div class="modal">
+  <h2>Ajouter un document qualité</h2>
+  <div class="field"><label>Nom du document</label><input id="f_docName" placeholder="Ex : SOP-Nettoyage-Assemblage"></div>
+  <div class="field"><label>Description</label><textarea id="f_docDesc" rows="2" placeholder="Objet du document, périmètre…"></textarea></div>
+  <div class="field"><label>Projet associé (optionnel)</label><select id="f_docProject"><option value="">— Document de service (général) —</option></select></div>
+  <div class="field"><label>Fichier</label><input type="file" id="f_docFile" accept=".docx,.doc,.pdf,.xlsx,.xls,.pptx,.ppt,.txt,.md,.csv"></div>
+  <div class="field"><label>Note de version (optionnel)</label><input id="f_docNote" placeholder="Ex : Création initiale"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:8px">
+    <button class="btn ghost" data-close="docCreateModal">Annuler</button>
+    <button class="btn primary" id="btnSaveDoc">Enregistrer</button>
+  </div>
+</div></div>
+
+<!-- Modale : détail document + versions -->
+<div class="modal-bg" id="docDetailModal"><div class="modal" style="width:min(760px,100%)">
+  <div id="docDetailContent"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:14px">
+    <button class="btn ghost" data-close="docDetailModal">Fermer</button>
+  </div>
+</div></div>
+<input type="file" id="docVersionFile" accept=".docx,.doc,.pdf,.xlsx,.xls,.pptx,.ppt,.txt,.md,.csv" class="hidden">
+
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="/static/app.js"></script>

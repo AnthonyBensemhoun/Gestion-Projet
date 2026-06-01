@@ -3,11 +3,12 @@ Atelier - Gestion de projet collaborative
 Backend FastAPI + SQLite
 """
 from fastapi import FastAPI, Depends, HTTPException, Request, Form, UploadFile, File, Cookie, Response
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlmodel import SQLModel, Field, Session, create_engine, select
-from sqlalchemy import text, update as sa_update
+from sqlalchemy import text, update as sa_update, LargeBinary, Column
+from urllib.parse import quote as _urlquote
 from typing import Optional, List
 from datetime import date, datetime, timedelta
 from passlib.hash import bcrypt
@@ -113,6 +114,29 @@ class Milestone(SQLModel, table=True):
 class Setting(SQLModel, table=True):
     key: str = Field(primary_key=True)
     value: str
+
+class Document(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: Optional[int] = Field(default=None, index=True)  # None = document de service (global)
+    name: str
+    description: str = ""
+    status: str = "draft"      # draft / review / approved
+    locked_by: Optional[int] = Field(default=None)   # user_id ayant verrouillé pour édition
+    locked_at: Optional[datetime] = Field(default=None)
+    created_by: Optional[int] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class DocumentVersion(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    document_id: int = Field(index=True)
+    version: int = 1
+    filename: str = ""
+    mime_type: str = ""
+    size: int = 0
+    content: bytes = Field(sa_column=Column(LargeBinary))
+    uploaded_by: Optional[int] = Field(default=None)
+    uploaded_at: datetime = Field(default_factory=datetime.utcnow)
+    note: str = ""
 
 class AuditLog(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -788,6 +812,170 @@ def send_email_endpoint(data: dict, u: User = Depends(require_user)):
         raise HTTPException(503, str(e))
     except Exception as e:
         raise HTTPException(502, f"Échec envoi email : {e}")
+    return {"ok": True}
+
+# ---------------- API : Gestion documentaire (qualité) ----------------
+DOC_MAX_SIZE = 25 * 1024 * 1024  # 25 Mo
+DOC_ALLOWED_EXT = (".docx", ".doc", ".pdf", ".xlsx", ".xls", ".pptx", ".ppt", ".txt", ".md", ".csv")
+DOC_STATUS = ("draft", "review", "approved")
+
+def _user_name(s: Session, uid):
+    if not uid: return None
+    u = s.get(User, uid)
+    return u.name if u else None
+
+def _doc_dict(s: Session, d: Document, versions=None):
+    if versions is None:
+        versions = s.exec(select(DocumentVersion).where(DocumentVersion.document_id == d.id)
+                          .order_by(DocumentVersion.version.desc())).all()
+    cur = versions[0] if versions else None
+    return {
+        "id": d.id, "name": d.name, "description": d.description,
+        "status": d.status, "project_id": d.project_id,
+        "locked_by": d.locked_by, "locked_by_name": _user_name(s, d.locked_by),
+        "locked_at": d.locked_at.isoformat() if d.locked_at else None,
+        "created_by_name": _user_name(s, d.created_by),
+        "created_at": d.created_at.isoformat() if d.created_at else None,
+        "version_count": len(versions),
+        "last_version": cur.version if cur else 0,
+        "last_modified_by": _user_name(s, cur.uploaded_by) if cur else None,
+        "last_modified_at": cur.uploaded_at.isoformat() if cur and cur.uploaded_at else None,
+        "last_filename": cur.filename if cur else None,
+    }
+
+@app.get("/api/documents")
+def list_documents(u: User = Depends(require_user), s: Session = Depends(get_session)):
+    docs = s.exec(select(Document).order_by(Document.name)).all()
+    return [_doc_dict(s, d) for d in docs]
+
+@app.get("/api/documents/{doc_id}")
+def get_document(doc_id: int, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    d = s.get(Document, doc_id)
+    if not d: raise HTTPException(404, "Document introuvable")
+    versions = s.exec(select(DocumentVersion).where(DocumentVersion.document_id == doc_id)
+                     .order_by(DocumentVersion.version.desc())).all()
+    out = _doc_dict(s, d, versions)
+    out["versions"] = [{
+        "id": v.id, "version": v.version, "filename": v.filename,
+        "size": v.size, "note": v.note,
+        "uploaded_by_name": _user_name(s, v.uploaded_by),
+        "uploaded_at": v.uploaded_at.isoformat() if v.uploaded_at else None,
+    } for v in versions]
+    return out
+
+@app.post("/api/documents")
+async def create_document(
+    name: str = Form(...), description: str = Form(""),
+    project_id: Optional[int] = Form(None), note: str = Form(""),
+    file: UploadFile = File(...),
+    u: User = Depends(require_user), s: Session = Depends(get_session)):
+    name = name.strip()
+    if not name: raise HTTPException(400, "Nom requis")
+    fname = (file.filename or "").lower()
+    if not fname.endswith(DOC_ALLOWED_EXT):
+        raise HTTPException(400, f"Format non supporté ({', '.join(DOC_ALLOWED_EXT)})")
+    content = await file.read()
+    if len(content) > DOC_MAX_SIZE:
+        raise HTTPException(400, "Fichier trop volumineux (max 25 Mo)")
+    d = Document(name=name, description=description.strip(),
+                 project_id=project_id, created_by=u.id, status="draft")
+    s.add(d); s.commit(); s.refresh(d)
+    v = DocumentVersion(document_id=d.id, version=1, filename=file.filename,
+                        mime_type=file.content_type or "application/octet-stream",
+                        size=len(content), content=content, uploaded_by=u.id,
+                        note=note.strip() or "Version initiale")
+    s.add(v)
+    _audit(s, u.name, "Création document", f"{name} (v1)")
+    s.commit()
+    return _doc_dict(s, d)
+
+@app.post("/api/documents/{doc_id}/versions")
+async def upload_version(
+    doc_id: int, note: str = Form(""), file: UploadFile = File(...),
+    u: User = Depends(require_user), s: Session = Depends(get_session)):
+    d = s.get(Document, doc_id)
+    if not d: raise HTTPException(404, "Document introuvable")
+    # Si verrouillé par quelqu'un d'autre, refuser (sauf admin)
+    if d.locked_by and d.locked_by != u.id and u.role != "admin":
+        raise HTTPException(403, f"Document verrouillé par {_user_name(s, d.locked_by)}")
+    fname = (file.filename or "").lower()
+    if not fname.endswith(DOC_ALLOWED_EXT):
+        raise HTTPException(400, f"Format non supporté ({', '.join(DOC_ALLOWED_EXT)})")
+    content = await file.read()
+    if len(content) > DOC_MAX_SIZE:
+        raise HTTPException(400, "Fichier trop volumineux (max 25 Mo)")
+    last = s.exec(select(DocumentVersion).where(DocumentVersion.document_id == doc_id)
+                 .order_by(DocumentVersion.version.desc())).first()
+    next_v = (last.version + 1) if last else 1
+    v = DocumentVersion(document_id=doc_id, version=next_v, filename=file.filename,
+                        mime_type=file.content_type or "application/octet-stream",
+                        size=len(content), content=content, uploaded_by=u.id,
+                        note=note.strip())
+    s.add(v)
+    # libère le verrou et enregistre
+    s.execute(sa_update(Document).where(Document.id == doc_id).values(locked_by=None, locked_at=None))
+    _audit(s, u.name, "Nouvelle version document", f"{d.name} (v{next_v})")
+    s.commit()
+    return _doc_dict(s, s.get(Document, doc_id))
+
+@app.get("/api/documents/{doc_id}/versions/{ver_id}/download")
+def download_version(doc_id: int, ver_id: int,
+                     u: User = Depends(require_user), s: Session = Depends(get_session)):
+    v = s.get(DocumentVersion, ver_id)
+    if not v or v.document_id != doc_id:
+        raise HTTPException(404, "Version introuvable")
+    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{_urlquote(v.filename)}"}
+    return StreamingResponse(io.BytesIO(v.content),
+                             media_type=v.mime_type or "application/octet-stream",
+                             headers=headers)
+
+@app.post("/api/documents/{doc_id}/lock")
+def lock_document(doc_id: int, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    d = s.get(Document, doc_id)
+    if not d: raise HTTPException(404, "Document introuvable")
+    if d.locked_by and d.locked_by != u.id:
+        raise HTTPException(409, f"Déjà verrouillé par {_user_name(s, d.locked_by)}")
+    s.execute(sa_update(Document).where(Document.id == doc_id)
+              .values(locked_by=u.id, locked_at=datetime.utcnow()))
+    _audit(s, u.name, "Verrouillage document", d.name)
+    s.commit()
+    return {"ok": True}
+
+@app.post("/api/documents/{doc_id}/unlock")
+def unlock_document(doc_id: int, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    d = s.get(Document, doc_id)
+    if not d: raise HTTPException(404, "Document introuvable")
+    if d.locked_by and d.locked_by != u.id and u.role != "admin":
+        raise HTTPException(403, "Seul le détenteur du verrou ou un admin peut déverrouiller")
+    s.execute(sa_update(Document).where(Document.id == doc_id).values(locked_by=None, locked_at=None))
+    _audit(s, u.name, "Déverrouillage document", d.name)
+    s.commit()
+    return {"ok": True}
+
+@app.put("/api/documents/{doc_id}")
+def update_document(doc_id: int, data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    d = s.get(Document, doc_id)
+    if not d: raise HTTPException(404, "Document introuvable")
+    updates = {}
+    if "name" in data and data["name"].strip(): updates["name"] = data["name"].strip()
+    if "description" in data: updates["description"] = data["description"].strip()
+    if "status" in data and data["status"] in DOC_STATUS: updates["status"] = data["status"]
+    if updates:
+        s.execute(sa_update(Document).where(Document.id == doc_id).values(**updates))
+        _audit(s, u.name, "Modification document", f"{d.name} — {list(updates.keys())}")
+        s.commit()
+    return {"ok": True}
+
+@app.delete("/api/documents/{doc_id}")
+def delete_document(doc_id: int, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    d = s.get(Document, doc_id)
+    if d:
+        if u.role != "admin" and d.created_by != u.id:
+            raise HTTPException(403, "Seul le créateur ou un admin peut supprimer ce document")
+        for v in s.exec(select(DocumentVersion).where(DocumentVersion.document_id == doc_id)).all():
+            s.delete(v)
+        _audit(s, u.name, "Suppression document", d.name)
+        s.delete(d); s.commit()
     return {"ok": True}
 
 # ---------------- API : Document Import ----------------

@@ -3,7 +3,7 @@
 const ME = window.CURRENT_USER;
 const IS_ADMIN = ME.is_admin;
 let state = {
-  projects: [], tasks: [], users: [], absences: [], alerts: [],
+  projects: [], tasks: [], users: [], absences: [], alerts: [], documents: [],
   currentProject: localStorage.getItem('atelier_curproj') || null,
   filterStatus: 'all'
 };
@@ -475,7 +475,7 @@ async function remindTask(taskId){
 /* ====== Navigation ====== */
 function tab(name){
   document.querySelectorAll('nav .tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));
-  ['dash','synth','tasks','team','absence','alerts','kanban','cal','list','capacity','audit'].forEach(s=>{
+  ['dash','synth','tasks','team','absence','alerts','kanban','cal','list','docs','capacity','audit'].forEach(s=>{
     const el=$('sec-'+s);
     if(!el) return;
     if(s===name){
@@ -487,6 +487,7 @@ function tab(name){
       el.classList.add('hidden');
     }
   });
+  if(name==='docs') renderDocs();
 }
 function openModal(id){fillSelects();$(id).classList.add('show');}
 function closeModal(id){$(id).classList.remove('show');}
@@ -525,9 +526,12 @@ async function editProject(){
 async function delProject(){
   const p=projById(state.currentProject);if(!p)return;
   if(!confirm('Supprimer le projet « '+p.name+' » et toutes ses tâches ?'))return;
-  await api('/api/projects/'+p.id,{method:'DELETE'});
-  state.currentProject=null;localStorage.removeItem('atelier_curproj');
-  await loadAll();
+  try{
+    await api('/api/projects/'+p.id,{method:'DELETE'});
+    state.currentProject=null;state.tasks=[];
+    localStorage.removeItem('atelier_curproj');
+    await loadAll();toast('Projet supprimé','warn');
+  }catch(e){toast(e.message,'err');}
 }
 
 /* ====== Tâches ====== */
@@ -536,6 +540,7 @@ function openTask(id){
   openModal('taskModal');
   if(id){
     const t=state.tasks.find(x=>x.id==id);
+    if(!t){closeModal('taskModal');toast('Tâche introuvable, rechargez la page.','err');return;}
     currentEditTaskId=parseInt(id,10);
     $('taskModalTitle').textContent='Modifier la tâche';
     $('f_taskId').value=t.id;$('f_title').value=t.title;$('f_desc').value=t.description||'';
@@ -966,6 +971,194 @@ async function renderAudit(){
   }catch(e){if($('auditBody'))$('auditBody').innerHTML='<tr><td colspan="4" class="empty">Erreur chargement</td></tr>';}
 }
 
+/* ====== Documents qualité ====== */
+const DOC_STATUS_LABEL={draft:'Brouillon',review:'En revue',approved:'Approuvé'};
+const DOC_STATUS_COLOR={draft:'#8a8478',review:'var(--warn)',approved:'var(--ok)'};
+let currentDocId=null;
+
+function fmtBytes(n){
+  if(!n) return '0 o';
+  if(n<1024) return n+' o';
+  if(n<1048576) return (n/1024).toFixed(0)+' Ko';
+  return (n/1048576).toFixed(1)+' Mo';
+}
+function fmtDateTime(iso){
+  if(!iso) return '—';
+  return new Date(iso).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+
+async function renderDocs(){
+  const el=$('docsList');if(!el)return;
+  el.innerHTML='<div class="empty">Chargement…</div>';
+  let docs;
+  try{docs=await api('/api/documents');}
+  catch(e){el.innerHTML='<div class="empty">Erreur : '+esc(e.message)+'</div>';return;}
+  state.documents=docs;
+  if(!docs.length){el.innerHTML='<div class="empty">Aucun document. Clique sur « + Ajouter un document ».</div>';return;}
+  el.innerHTML=docs.map(d=>{
+    const lockedByOther=d.locked_by && d.locked_by!==ME.id;
+    const lockBadge=d.locked_by
+      ? `<span class="pill" style="background:rgba(214,56,63,.12);color:var(--bad)">🔒 ${esc(d.locked_by_name||'?')}${d.locked_by===ME.id?' (toi)':''}</span>`
+      : '';
+    const proj=d.project_id?projById(d.project_id):null;
+    return `<div class="card" style="cursor:pointer" data-open-doc="${d.id}">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <span class="tag" style="background:${DOC_STATUS_COLOR[d.status]};color:#fff">${DOC_STATUS_LABEL[d.status]||d.status}</span>
+        <span class="pill">v${d.last_version}</span>
+      </div>
+      <h3 style="margin-top:8px">📄 ${esc(d.name)}</h3>
+      ${d.description?`<div class="meta">${esc(d.description)}</div>`:''}
+      ${proj?`<div class="meta">📁 ${esc(proj.name)}</div>`:'<div class="meta">📁 Document de service</div>'}
+      <div class="meta" style="margin-top:6px">✏️ Dernière modif : <strong>${esc(d.last_modified_by||'?')}</strong></div>
+      <div class="meta">🕐 ${fmtDateTime(d.last_modified_at)}</div>
+      <div class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap">
+        <span class="pill">${d.version_count} version(s)</span>
+        ${lockBadge}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function openDocDetail(docId){
+  currentDocId=parseInt(docId,10);
+  openModal('docDetailModal');
+  const c=$('docDetailContent');
+  c.innerHTML='<div class="empty">Chargement…</div>';
+  let d;
+  try{d=await api('/api/documents/'+currentDocId);}
+  catch(e){c.innerHTML='<div class="empty">Erreur : '+esc(e.message)+'</div>';return;}
+  const isLockedByMe=d.locked_by===ME.id;
+  const isLockedByOther=d.locked_by && d.locked_by!==ME.id;
+  const canDelete=IS_ADMIN || d.created_by_name===ME.name;
+  const cur=d.versions[0];
+
+  const lockInfo=d.locked_by
+    ? `<div class="meta" style="color:${isLockedByMe?'var(--ok)':'var(--bad)'};font-weight:600">🔒 Verrouillé par ${esc(d.locked_by_name)}${isLockedByMe?' (toi)':''} — ${fmtDateTime(d.locked_at)}</div>`
+    : `<div class="meta" style="color:var(--ok)">🔓 Disponible pour édition</div>`;
+
+  // Boutons d'action selon l'état du verrou
+  let actionBtns='';
+  if(!d.locked_by){
+    actionBtns=`<button class="btn primary sm" data-doc-lock="${d.id}">🔒 Verrouiller pour éditer</button>`;
+  }else if(isLockedByMe){
+    actionBtns=`<button class="btn primary sm" id="btnUploadNewVersion">⬆ Uploader nouvelle version</button>
+                <button class="btn ghost sm" data-doc-unlock="${d.id}">Libérer le verrou</button>`;
+  }else{
+    actionBtns=`<span class="meta">Verrouillé par ${esc(d.locked_by_name)}.</span>
+                ${IS_ADMIN?`<button class="btn ghost sm" data-doc-unlock="${d.id}">Forcer le déverrouillage (admin)</button>`:''}`;
+  }
+
+  const statusSel=`<select id="f_docStatus" class="btn sm">
+    ${Object.keys(DOC_STATUS_LABEL).map(k=>`<option value="${k}"${d.status===k?' selected':''}>${DOC_STATUS_LABEL[k]}</option>`).join('')}
+  </select>`;
+
+  const versionsHtml=d.versions.map(v=>`
+    <div class="row" style="justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line)">
+      <div style="flex:1;min-width:0">
+        <div class="row" style="gap:8px;align-items:center">
+          <span class="pill" style="font-weight:700">v${v.version}</span>
+          <strong style="font-size:13px">${esc(v.filename)}</strong>
+          <span class="meta" style="font-size:11px">${fmtBytes(v.size)}</span>
+        </div>
+        <div class="meta" style="font-size:12px">Par ${esc(v.uploaded_by_name||'?')} · ${fmtDateTime(v.uploaded_at)}${v.note?' · '+esc(v.note):''}</div>
+      </div>
+      <a class="btn sm ghost" href="/api/documents/${d.id}/versions/${v.id}/download">⬇ Télécharger</a>
+    </div>`).join('');
+
+  c.innerHTML=`
+    <div class="row" style="justify-content:space-between;align-items:flex-start">
+      <h2 style="margin:0">📄 ${esc(d.name)}</h2>
+      <span class="tag" style="background:${DOC_STATUS_COLOR[d.status]};color:#fff">${DOC_STATUS_LABEL[d.status]}</span>
+    </div>
+    ${d.description?`<div class="meta" style="margin-top:6px">${esc(d.description)}</div>`:''}
+    <div class="meta" style="margin-top:4px">Créé par ${esc(d.created_by_name||'?')} · ${fmtDateTime(d.created_at)}</div>
+    <div style="margin:12px 0">${lockInfo}</div>
+
+    <div class="panel" style="padding:12px;margin-bottom:14px">
+      <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
+        ${cur?`<a class="btn sm" href="/api/documents/${d.id}/versions/${cur.id}/download">⬇ Télécharger la dernière (v${cur.version})</a>`:''}
+        ${actionBtns}
+      </div>
+      ${isLockedByMe?`<div class="meta" style="margin-top:8px;font-size:12px">💡 Édite le fichier téléchargé dans Word, puis clique « Uploader nouvelle version ».</div>`:''}
+    </div>
+
+    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
+      <strong>Statut qualité :</strong> ${statusSel}
+    </div>
+
+    <h3 style="font-size:15px;margin:16px 0 4px">Historique des versions (${d.versions.length})</h3>
+    <div style="max-height:260px;overflow:auto">${versionsHtml||'<div class="empty">Aucune version</div>'}</div>
+
+    ${canDelete?`<div class="row" style="justify-content:flex-start;margin-top:14px">
+      <button class="btn sm ghost" style="color:var(--bad)" data-doc-delete="${d.id}">🗑 Supprimer ce document</button>
+    </div>`:''}
+  `;
+
+  // Wiring local
+  const stSel=$('f_docStatus');
+  if(stSel) stSel.addEventListener('change',async function(){
+    try{await api('/api/documents/'+d.id,{method:'PUT',body:{status:this.value}});toast('Statut mis à jour');renderDocs();}
+    catch(e){toast(e.message,'err');}
+  });
+  const upBtn=$('btnUploadNewVersion');
+  if(upBtn) upBtn.addEventListener('click',()=>$('docVersionFile').click());
+}
+
+async function uploadNewVersion(file){
+  if(!file||!currentDocId)return;
+  const note=prompt('Note de version (décris brièvement ce que tu as modifié) :','')||'';
+  const fd=new FormData();
+  fd.append('file',file);
+  fd.append('note',note);
+  try{
+    const r=await fetch('/api/documents/'+currentDocId+'/versions',{method:'POST',body:fd});
+    if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.detail||'Erreur '+r.status);}
+    toast('Nouvelle version enregistrée');
+    openDocDetail(currentDocId);
+    renderDocs();
+  }catch(e){toast(e.message,'err');}
+}
+
+async function saveDoc(){
+  const name=$('f_docName').value.trim();
+  const file=$('f_docFile').files[0];
+  if(!name){toast('Le nom est obligatoire.','err');return;}
+  if(!file){toast('Sélectionne un fichier.','err');return;}
+  const fd=new FormData();
+  fd.append('name',name);
+  fd.append('description',$('f_docDesc').value.trim());
+  fd.append('note',$('f_docNote').value.trim());
+  const pid=$('f_docProject').value;
+  if(pid) fd.append('project_id',pid);
+  fd.append('file',file);
+  try{
+    const r=await fetch('/api/documents',{method:'POST',body:fd});
+    if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.detail||'Erreur '+r.status);}
+    closeModal('docCreateModal');
+    $('f_docName').value='';$('f_docDesc').value='';$('f_docNote').value='';$('f_docFile').value='';
+    toast('Document ajouté');
+    renderDocs();
+  }catch(e){toast(e.message,'err');}
+}
+
+async function lockDoc(id){
+  try{await api('/api/documents/'+id+'/lock',{method:'POST',body:{}});openDocDetail(id);renderDocs();}
+  catch(e){toast(e.message,'err');}
+}
+async function unlockDoc(id){
+  try{await api('/api/documents/'+id+'/unlock',{method:'POST',body:{}});openDocDetail(id);renderDocs();}
+  catch(e){toast(e.message,'err');}
+}
+async function deleteDoc(id){
+  if(!confirm('Supprimer ce document et tout son historique de versions ? Action irréversible.'))return;
+  try{await api('/api/documents/'+id,{method:'DELETE'});closeModal('docDetailModal');toast('Document supprimé','warn');renderDocs();}
+  catch(e){toast(e.message,'err');}
+}
+function openDocCreate(){
+  $('f_docProject').innerHTML='<option value="">— Document de service (général) —</option>'+state.projects.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  $('docCreateModal').classList.add('show');
+}
+
 /* ====== Toasts ====== */
 function toast(msg, type='ok'){
   let container=$('toastContainer');
@@ -1125,7 +1318,7 @@ function renderCommentList(comments){
 
 /* ====== Événements ====== */
 document.addEventListener('click',function(e){
-  const t=e.target.closest('[data-tab],[data-close],[data-edit-task],[data-del-task],[data-edit-person],[data-del-person],[data-del-abs],[data-remind],[data-ack],[data-remind-person],[data-remind-login]');
+  const t=e.target.closest('[data-tab],[data-close],[data-edit-task],[data-del-task],[data-edit-person],[data-del-person],[data-del-abs],[data-remind],[data-ack],[data-remind-person],[data-remind-login],[data-open-doc],[data-doc-lock],[data-doc-unlock],[data-doc-delete]');
   if(!t)return;
   if(t.hasAttribute('data-tab'))tab(t.dataset.tab);
   else if(t.hasAttribute('data-close'))closeModal(t.dataset.close);
@@ -1138,6 +1331,10 @@ document.addEventListener('click',function(e){
   else if(t.hasAttribute('data-ack'))ackAlert(t.dataset.ack);
   else if(t.hasAttribute('data-remind-person'))remindPerson(parseInt(t.dataset.remindPerson,10));
   else if(t.hasAttribute('data-remind-login'))remindLogin(t.dataset.remindLogin);
+  else if(t.hasAttribute('data-open-doc'))openDocDetail(t.dataset.openDoc);
+  else if(t.hasAttribute('data-doc-lock'))lockDoc(t.dataset.docLock);
+  else if(t.hasAttribute('data-doc-unlock'))unlockDoc(t.dataset.docUnlock);
+  else if(t.hasAttribute('data-doc-delete'))deleteDoc(t.dataset.docDelete);
 });
 document.querySelectorAll('.modal-bg').forEach(m=>m.addEventListener('click',e=>{if(e.target===m && m.id!=='changePwModal')m.classList.remove('show');}));
 
@@ -1167,6 +1364,10 @@ $('btnSaveTask').addEventListener('click',saveTask);
 $('btnSavePerson').addEventListener('click',savePerson);
 $('btnSaveAbs').addEventListener('click',saveAbsence);
 $('btnAckAll').addEventListener('click',ackAll);
+// Documents qualité
+if($('btnAddDoc')) $('btnAddDoc').addEventListener('click',openDocCreate);
+if($('btnSaveDoc')) $('btnSaveDoc').addEventListener('click',saveDoc);
+if($('docVersionFile')) $('docVersionFile').addEventListener('change',function(e){const f=e.target.files[0];if(f)uploadNewVersion(f);e.target.value='';});
 $('btnExportPDF').addEventListener('click',exportPDF);
 $('btnImportDoc').addEventListener('click',()=>$('docInput').click());
 $('docInput').addEventListener('change',function(e){const f=e.target.files[0];if(f)startDocImport(f);e.target.value='';});

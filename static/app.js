@@ -182,8 +182,9 @@ function renderTeam(){
         ${absent?`<span class="pill absent">Absent aujourd&#39;hui</span>`:`<span class="pill ok">Disponible</span>`}
         ${u.role==='admin'?'<span class="pill admin">Admin</span>':''}
       </div>
-      ${IS_ADMIN?`<div class="row" style="justify-content:flex-end;margin-top:10px">
-        ${u.email?`<button class="btn sm ghost" data-remind-person="${u.id}">✉ Rappel</button>`:''}
+      ${IS_ADMIN?`<div class="row" style="justify-content:flex-end;margin-top:10px;flex-wrap:wrap;gap:5px">
+        ${u.email?`<button class="btn sm ghost" data-remind-person="${u.id}">✉ Rappel tâches</button>`:''}
+        ${u.email&&!u.last_login?`<button class="btn sm" style="background:var(--acc);color:#fff" data-remind-login="${u.id}">✉ Inviter à se connecter</button>`:u.email?`<button class="btn sm ghost" data-remind-login="${u.id}">🔗 Rappel connexion</button>`:''}
         <button class="btn sm ghost" data-edit-person="${u.id}">Modifier</button>
         ${u.id!==ME.id?`<button class="btn sm ghost" data-del-person="${u.id}">Supprimer</button>`:''}
       </div>`:''}
@@ -282,17 +283,30 @@ function renderCalendar(){
   for(let d=1;d<=totalDays;d++){
     const dateStr=`${calYear}-${String(calMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
     const isToday=dateStr===todayStr;
+    // Tâches
     const dayTasks=ts.filter(t=>t.due_date===dateStr);
-    const MAX=3;
-    const pills=dayTasks.slice(0,MAX).map(t=>{
+    // Absences de tous les collaborateurs
+    const dayAbs=state.absences.filter(a=>a.from_date<=dateStr&&a.to_date>=dateStr);
+    // Jalons du projet
+    const dayMs=projectMilestones.filter(m=>m.due_date===dateStr);
+    const MAX_T=2,MAX_A=2;
+    const taskPills=dayTasks.slice(0,MAX_T).map(t=>{
       const late=isLate(t);
       const color=t.status==='done'?'var(--ok)':late?'var(--bad)':t.priority==='h'?'#d6383f':t.priority==='m'?'var(--warn)':'var(--info)';
       return `<div class="cal-task-pill" style="background:${color}" data-edit-task="${t.id}" title="${esc(t.title)}">${esc(t.title)}</div>`;
     }).join('');
-    const more=dayTasks.length>MAX?`<div class="cal-more">+${dayTasks.length-MAX} autres</div>`:'';
+    const absPills=dayAbs.slice(0,MAX_A).map(a=>{
+      const u=userById(a.user_id);
+      const nm=u?u.name:'?';
+      const col=u?avaColor(u.id):'#888';
+      return `<div class="cal-abs-pill" style="background:${col}" title="${esc(nm)} — ${esc(a.kind)}">${initials(nm)} <span style="opacity:.75;font-size:9px">${esc(a.kind.slice(0,9))}</span></div>`;
+    }).join('');
+    const msPills=dayMs.map(m=>`<div class="cal-ms-pill" title="Jalon : ${esc(m.name)}">🏁 ${esc(m.name)}</div>`).join('');
+    const extra=(dayTasks.length>MAX_T?dayTasks.length-MAX_T:0)+(dayAbs.length>MAX_A?dayAbs.length-MAX_A:0);
+    const more=extra>0?`<div class="cal-more">+${extra} autres</div>`:'';
     cells+=`<div class="cal-cell${isToday?' today':''}">
       <span class="cal-date-num">${d}</span>
-      <div class="cal-tasks">${pills}${more}</div>
+      <div class="cal-tasks">${msPills}${taskPills}${absPills}${more}</div>
     </div>`;
   }
   const rem=(startDow+totalDays)%7;
@@ -302,6 +316,11 @@ function renderCalendar(){
     <h3 class="cal-title">${MONTHS_FR[calMonth]} ${calYear}</h3>
     <button class="btn sm ghost" id="calToday">Aujourd'hui</button>
     <button class="btn sm ghost" id="calNext">Suivant →</button>
+  </div>
+  <div class="cal-legend">
+    <span class="cal-legend-item"><span class="cal-legend-dot" style="background:var(--info)"></span>Tâche</span>
+    <span class="cal-legend-item"><span class="cal-legend-dot" style="background:#e8642f"></span>Absence collaborateur</span>
+    <span class="cal-legend-item"><span class="cal-legend-dot" style="background:#9b59b6"></span>Jalon</span>
   </div>
   <div class="cal-grid">${headers}${cells}</div>`;
   $('calPrev').onclick=()=>{calMonth===0?(calMonth=11,calYear--):calMonth--;renderCalendar();};
@@ -420,6 +439,20 @@ async function remindPerson(userId){
   try{
     await api('/api/send-email',{method:'POST',body:{to:u.email,subject,body}});
     toast('Email envoyé à '+u.name);
+  }catch(e){toast(e.message,'err');}
+}
+
+/* ====== Rappel connexion ====== */
+async function remindLogin(userId){
+  const u=userById(parseInt(userId,10));
+  if(!u||!u.email){toast("Cet utilisateur n'a pas d'adresse email.",'err');return;}
+  const appUrl=window.location.origin;
+  const appName=document.title;
+  const subject=`Invitation à se connecter — ${appName}`;
+  const body=`Bonjour ${u.name.split(' ')[0]},\n\nCeci est un rappel pour vous connecter à l'application de gestion de projet "${appName}".\n\nAccédez à l'application ici :\n${appUrl}\n\nVos identifiants vous ont été communiqués lors de votre inscription. Si vous avez oublié votre mot de passe, contactez l'administrateur.\n\nÀ bientôt !`;
+  try{
+    await api('/api/send-email',{method:'POST',body:{to:u.email,subject,body}});
+    toast('Rappel envoyé à '+u.name);
   }catch(e){toast(e.message,'err');}
 }
 
@@ -1092,7 +1125,7 @@ function renderCommentList(comments){
 
 /* ====== Événements ====== */
 document.addEventListener('click',function(e){
-  const t=e.target.closest('[data-tab],[data-close],[data-edit-task],[data-del-task],[data-edit-person],[data-del-person],[data-del-abs],[data-remind],[data-ack],[data-remind-person]');
+  const t=e.target.closest('[data-tab],[data-close],[data-edit-task],[data-del-task],[data-edit-person],[data-del-person],[data-del-abs],[data-remind],[data-ack],[data-remind-person],[data-remind-login]');
   if(!t)return;
   if(t.hasAttribute('data-tab'))tab(t.dataset.tab);
   else if(t.hasAttribute('data-close'))closeModal(t.dataset.close);
@@ -1104,6 +1137,7 @@ document.addEventListener('click',function(e){
   else if(t.hasAttribute('data-remind'))remindTask(t.dataset.remind);
   else if(t.hasAttribute('data-ack'))ackAlert(t.dataset.ack);
   else if(t.hasAttribute('data-remind-person'))remindPerson(parseInt(t.dataset.remindPerson,10));
+  else if(t.hasAttribute('data-remind-login'))remindLogin(t.dataset.remindLogin);
 });
 document.querySelectorAll('.modal-bg').forEach(m=>m.addEventListener('click',e=>{if(e.target===m && m.id!=='changePwModal')m.classList.remove('show');}));
 

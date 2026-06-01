@@ -436,10 +436,7 @@ async function remindPerson(userId){
   }
   body+=`Merci de tenir ton avancement à jour dans l'application.\n\nCordialement,\n${ME.name}`;
   const subject=`Récapitulatif de tes tâches — ${document.title}`;
-  try{
-    await api('/api/send-email',{method:'POST',body:{to:u.email,subject,body}});
-    toast('Email envoyé à '+u.name);
-  }catch(e){toast(e.message,'err');}
+  window.location.href='mailto:'+encodeURIComponent(u.email)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
 }
 
 /* ====== Rappel connexion ====== */
@@ -450,10 +447,7 @@ async function remindLogin(userId){
   const appName=document.title;
   const subject=`Invitation à se connecter — ${appName}`;
   const body=`Bonjour ${u.name.split(' ')[0]},\n\nCeci est un rappel pour vous connecter à l'application de gestion de projet "${appName}".\n\nAccédez à l'application ici :\n${appUrl}\n\nVos identifiants vous ont été communiqués lors de votre inscription. Si vous avez oublié votre mot de passe, contactez l'administrateur.\n\nÀ bientôt !`;
-  try{
-    await api('/api/send-email',{method:'POST',body:{to:u.email,subject,body}});
-    toast('Rappel envoyé à '+u.name);
-  }catch(e){toast(e.message,'err');}
+  window.location.href='mailto:'+encodeURIComponent(u.email)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
 }
 
 /* ====== Relance mail ====== */
@@ -466,10 +460,7 @@ async function remindTask(taskId){
   const d=Math.abs(daysBetween(t.due_date,today()));
   const subject='Relance — tâche en retard : '+t.title;
   const body=`Bonjour ${u.name.split(' ')[0]},\n\nPetit rappel concernant la tâche suivante, actuellement en retard de ${d} jour(s) :\n\n• Tâche : ${t.title}\n${proj?'• Projet : '+proj.name+'\n':''}• Échéance initiale : ${fmtDate(t.due_date)}\n• Priorité : ${PRIO_LABEL[t.priority]}\n• Avancement actuel : ${t.progress||0}%\n\nPeux-tu me faire un point sur l'avancement et une date de livraison réaliste ?\n\nMerci,\n${ME.name}`;
-  try{
-    await api('/api/send-email',{method:'POST',body:{to:u.email,subject,body}});
-    toast('Email envoyé à '+u.name);
-  }catch(e){toast(e.message,'err');}
+  window.location.href='mailto:'+encodeURIComponent(u.email)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
 }
 
 /* ====== Navigation ====== */
@@ -1449,17 +1440,13 @@ async function changeMyPassword(){
     ME.must_change_password=false;
   }catch(e){err.textContent=e.message;err.style.display='';}
 }
-$('btnSendInvite').addEventListener('click',async function(){
+$('btnSendInvite').addEventListener('click',function(){
   const d=window._inviteData;if(!d)return;
   const appUrl=window.location.origin;
   const appName=document.title;
   const subject=`Invitation à ${appName}`;
   const body=`Bonjour ${d.name.split(' ')[0]},\n\nTu as été ajouté(e) à l'application de gestion de projet "${appName}".\n\nPour te connecter :\n${appUrl}\n\nEmail : ${d.email}\nMot de passe temporaire : ${d.password}\n\nLors de ta première connexion, tu devras choisir un nouveau mot de passe personnel.\n\nÀ bientôt !`;
-  try{
-    await api('/api/send-email',{method:'POST',body:{to:d.email,subject,body}});
-    toast('Invitation envoyée à '+d.email);
-    closeModal('inviteModal');
-  }catch(e){toast(e.message,'err');}
+  window.location.href='mailto:'+encodeURIComponent(d.email)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
 });
 $('btnChangePw').addEventListener('click',changeMyPassword);
 [$('f_newPw'),$('f_newPw2')].forEach(inp=>inp.addEventListener('keydown',e=>{if(e.key==='Enter')changeMyPassword();}));

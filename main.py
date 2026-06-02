@@ -1781,6 +1781,10 @@ MANUAL_FEATURES = [
         "Mes projets, mes tâches (triées par urgence), mes documents assignés.",
         "Widgets personnalisables : note, horloge, mémo, compte à rebours, absents du jour…",
         "Synchronisé sur ton compte : tu retrouves tout sur n'importe quel poste."]),
+    ("Portefeuille de projets", "Piloter tous les projets d'un coup d'œil", [
+        "Bandeau global : nombre de projets, avancement global, tâches en retard, projets en difficulté.",
+        "Une carte par projet : santé (🟢🟠🔴), chef de projet, avancement, tâches, documents, prochaine échéance.",
+        "Un clic sur une carte ouvre directement la synthèse du projet."]),
     ("Tableau de bord projet", "Vue d'ensemble du projet sélectionné", [
         "Indicateurs clés : tâches, en cours, terminées, en retard, avancement.",
         "Répartition des statuts et charge par membre (graphiques).",
@@ -1791,8 +1795,8 @@ MANUAL_FEATURES = [
         "Échéances à venir sur 7 jours, compteurs animés."]),
     ("Synthèse & Gantt", "Planning visuel du projet", [
         "Diagramme de Gantt des tâches avec dépendances temporelles.",
-        "Jalons et avancement pondéré.",
-        "Santé du projet en un coup d'œil."]),
+        "Courbe d'avancement « planifié vs réel » (burn-up) pour repérer retard/avance.",
+        "Jalons, avancement pondéré et santé du projet en un coup d'œil."]),
     ("Tâches", "Création, suivi et assignation", [
         "Statut, priorité, échéance, estimation, sous-tâches, étiquettes.",
         "Commentaires avec @mentions (notification de la personne citée).",
@@ -1816,7 +1820,9 @@ MANUAL_FEATURES = [
     ("Documents — Workflow qualité", "Circuit type Veeva avant le QMS", [
         "Phases : Rédaction → Revue équipe → Revue QA → Approbation → Prêt QMS.",
         "Timeline animée : où en est le document et chez qui.",
-        "Verrouillage / nouvelle version (check-out / check-in), historique complet."]),
+        "Verrouillage / nouvelle version (check-out / check-in), historique complet.",
+        "Un document « chez » un collègue ne peut être poussé que par lui — ou un admin.",
+        "Bandeau QMS en tête de page : hors délai SLA, signatures attendues, « lu & compris » dus, diffusions, obsolètes."]),
     ("Signature électronique", "Esprit 21 CFR Part 11", [
         "Signature obligatoire (mot de passe + motif) en Approbation et Prêt QMS.",
         "Trace immuable : signataire, signification, motif, version, date/heure.",
@@ -1837,6 +1843,14 @@ MANUAL_FEATURES = [
         "Importe le planning d'un fournisseur (PDF) : l'IA extrait les tâches.",
         "Distingue automatiquement les tâches fournisseur (tag dédié).",
         "Tu valides, ajustes les dates, puis importes dans le projet."]),
+    ("Recherche globale & raccourcis", "Aller partout en quelques touches", [
+        "Ctrl+K (ou « / ») : recherche instantanée projets, tâches, documents et personnes.",
+        "Navigation 100 % clavier dans la palette : ↑ ↓ pour parcourir, ↵ pour ouvrir.",
+        "Raccourcis : « n » nouvelle tâche, « a » activité, « ? » aide ; « g » puis une lettre pour changer d'onglet."]),
+    ("Fil d'activité", "Le pouls du service en temps réel", [
+        "Icône 🕑 dans la barre du haut : les dernières actions de toute l'équipe.",
+        "Création/modif de projets et tâches, transitions et signatures de documents, imports…",
+        "Chaque ligne indique qui, quoi et il y a combien de temps."]),
     ("Audit & traçabilité", "Tout est enregistré", [
         "Journal d'audit : qui a fait quoi, quand (connexions, créations, signatures…).",
         "Rapport hebdomadaire automatique par email.",

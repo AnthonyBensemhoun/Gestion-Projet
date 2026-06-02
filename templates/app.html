@@ -21,6 +21,7 @@
   </div>
   <nav class="side-nav">
     <div class="side-group">Pilotage</div>
+    <a class="tab" data-tab="me"><span class="ic">🏠</span><span class="lb">Mon espace</span></a>
     <a class="tab active" data-tab="dash"><span class="ic">📊</span><span class="lb">Tableau de bord</span></a>
     <a class="tab" data-tab="kpi"><span class="ic">🎯</span><span class="lb">KPI Service</span></a>
     <a class="tab" data-tab="synth"><span class="ic">📈</span><span class="lb">Synthèse projet</span></a>
@@ -79,6 +80,10 @@
   </div>
 
 <main>
+  <section id="sec-me" class="hidden">
+    <div id="meContent"></div>
+  </section>
+
   <section id="sec-kpi" class="hidden">
     <div class="sec-h"><h2>🎯 KPI de service</h2><span class="meta" style="font-size:12px">Vue consolidée tous projets</span></div>
     <div id="kpiContent"></div>

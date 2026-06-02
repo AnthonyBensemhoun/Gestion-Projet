@@ -13,6 +13,7 @@ let currentEditTaskId = null;
 let activeFilters = {assignee: '', priority: '', status: 'all'};
 let projectTags = [], projectMilestones = [], currentTaskTags = [];
 let chartStatus = null, chartAssignee = null;
+let allTasksCache = [];  // toutes les tâches tous projets (alimenté par Mon espace / KPI)
 
 /* ====== Helpers ====== */
 const $ = id => document.getElementById(id);
@@ -507,7 +508,7 @@ async function remindTask(taskId){
 /* ====== Navigation ====== */
 function tab(name){
   document.querySelectorAll('nav .tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));
-  ['dash','kpi','synth','tasks','team','absence','alerts','kanban','cal','list','docs','capacity','audit'].forEach(s=>{
+  ['me','dash','kpi','synth','tasks','team','absence','alerts','kanban','cal','list','docs','capacity','audit'].forEach(s=>{
     const el=$('sec-'+s);
     if(!el) return;
     if(s===name){
@@ -521,6 +522,7 @@ function tab(name){
   });
   if(name==='docs') renderDocs();
   if(name==='kpi') renderKPI();
+  if(name==='me') renderMe();
 }
 function openModal(id){fillSelects();$(id).classList.add('show');}
 function closeModal(id){$(id).classList.remove('show');}
@@ -572,7 +574,7 @@ function openTask(id){
   if(!state.projects.length){alert('Crée d\'abord un projet.');return;}
   openModal('taskModal');
   if(id){
-    const t=state.tasks.find(x=>x.id==id);
+    const t=state.tasks.find(x=>x.id==id)||allTasksCache.find(x=>x.id==id);
     if(!t){closeModal('taskModal');toast('Tâche introuvable, rechargez la page.','err');return;}
     currentEditTaskId=parseInt(id,10);
     $('taskModalTitle').textContent='Modifier la tâche';
@@ -1141,6 +1143,94 @@ async function renderAudit(){
   }catch(e){if($('auditBody'))$('auditBody').innerHTML='<tr><td colspan="4" class="empty">Erreur chargement</td></tr>';}
 }
 
+/* ====== Mon espace (tableau de bord personnel) ====== */
+async function renderMe(){
+  const el=$('meContent');if(!el)return;
+  el.innerHTML='<div class="empty">Chargement…</div>';
+  let allTasks=[],allDocs=[];
+  try{[allTasks,allDocs]=await Promise.all([api('/api/tasks'),api('/api/documents')]);}
+  catch(e){el.innerHTML='<div class="empty">Erreur : '+esc(e.message)+'</div>';return;}
+  allTasksCache=allTasks;
+
+  const myTasks=allTasks.filter(t=>t.assignee_id===ME.id&&t.status!=='done');
+  const myLate=myTasks.filter(isLate);
+  const mySoon=myTasks.filter(t=>!isLate(t)&&t.due_date&&daysBetween(today(),t.due_date)>=0&&daysBetween(today(),t.due_date)<=7);
+  const myDocs=allDocs.filter(d=>d.assigned_to===ME.id);
+
+  // Tri par urgence : retard → échéance proche → reste
+  const urgency=t=>{ if(isLate(t))return 0; if(t.due_date){const d=daysBetween(today(),t.due_date); if(d>=0&&d<=7)return 1+d/100;} return 5; };
+  const sorted=myTasks.slice().sort((a,b)=>{const ua=urgency(a),ub=urgency(b);if(ua!==ub)return ua-ub;return (a.due_date||'9999')<(b.due_date||'9999')?-1:1;});
+
+  const hour=new Date().getHours();
+  const greet=hour<18?'Bonjour':'Bonsoir';
+  const dateStr=new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
+  let summary;
+  if(myTasks.length===0&&myDocs.length===0) summary='Rien d\'assigné pour le moment. Profite ! 🎉';
+  else summary=`Tu as <strong>${myTasks.length}</strong> tâche(s) active(s)${myLate.length?` dont <strong style="color:var(--bad)">${myLate.length} en retard</strong>`:''} · <strong>${myDocs.length}</strong> document(s) chez toi.`;
+
+  const hero=`<div class="me-hero">
+    <div class="me-hero-txt">
+      <h2>${greet} ${esc(ME.name.split(' ')[0])} 👋</h2>
+      <div class="me-date">${dateStr}</div>
+      <div class="me-summary">${summary}</div>
+    </div>
+    <div class="me-ava" style="background:${avaColor(ME.id)}">${initials(ME.name)}</div>
+  </div>`;
+
+  const kpis=`<div class="kpi-hero">
+    ${kpiCard('✓','Mes tâches actives',myTasks.length,'','info')}
+    ${kpiCard('⏰','En retard',myLate.length,'',myLate.length>0?'bad':'ok')}
+    ${kpiCard('📅','Échéances à 7 j',mySoon.length,'',mySoon.length>0?'warn':'ok')}
+    ${kpiCard('📄','Documents chez moi',myDocs.length,'','teal')}
+  </div>`;
+
+  // Liste de mes tâches
+  const taskRows=sorted.map(t=>{
+    const p=projById(t.project_id);
+    const late=isLate(t);
+    const d=t.due_date?daysBetween(today(),t.due_date):null;
+    const soon=!late&&d!==null&&d>=0&&d<=7;
+    const dueCls=late?'late':soon?'soon':'';
+    const dueTxt=t.due_date?(late?`En retard (${Math.abs(d)}j)`:fmtDate(t.due_date)):'—';
+    const prioCol=t.priority==='h'?'var(--bad)':t.priority==='m'?'var(--warn)':'var(--info)';
+    return `<div class="me-row" data-edit-task="${t.id}">
+      <span class="me-prio" style="background:${prioCol}" title="${PRIO_LABEL[t.priority]}"></span>
+      <div style="flex:1;min-width:0">
+        <div class="me-row-title">${esc(t.title)}</div>
+        <div class="meta" style="font-size:11.5px">${p?esc(p.name)+' · ':''}${STATUS_LABEL[t.status]}${t.progress?` · ${t.progress}%`:''}</div>
+      </div>
+      <span class="me-due ${dueCls}">📅 ${dueTxt}</span>
+    </div>`;
+  }).join('')||'<div class="empty">Aucune tâche assignée 🎉</div>';
+
+  // Liste de mes documents
+  const docRows=myDocs.map(d=>{
+    const ph=DOC_PHASE_BY_KEY[d.phase||'redaction']||{ic:'•',label:d.phase,color:'var(--mut)'};
+    const p=d.project_id?projById(d.project_id):null;
+    return `<div class="me-row" data-open-doc="${d.id}">
+      <span class="me-prio" style="background:${ph.color}"></span>
+      <div style="flex:1;min-width:0">
+        <div class="me-row-title">📄 ${esc(d.name)}</div>
+        <div class="meta" style="font-size:11.5px">${p?esc(p.name)+' · ':'Service · '}v${d.last_version}</div>
+      </div>
+      <span class="pill" style="background:${ph.color};color:#fff;font-size:10px">${ph.ic} ${ph.label}</span>
+    </div>`;
+  }).join('')||'<div class="empty">Aucun document chez toi</div>';
+
+  el.innerHTML=hero+kpis+`<div class="kpi-grid2">
+    <div class="panel"><div class="sec-h" style="margin-bottom:8px"><h2 style="font-size:15px">✓ Mes tâches (${myTasks.length})</h2></div>
+      <div style="max-height:420px;overflow:auto">${taskRows}</div></div>
+    <div class="panel"><div class="sec-h" style="margin-bottom:8px"><h2 style="font-size:15px">📄 Mes documents (${myDocs.length})</h2></div>
+      <div style="max-height:420px;overflow:auto">${docRows}</div></div>
+  </div>`;
+
+  el.querySelectorAll('[data-countup]').forEach(node=>{
+    const target=parseFloat(node.dataset.countup)||0;const start=performance.now();const dur=750;
+    function step(now){const pr=Math.min(1,(now-start)/dur);node.textContent=Math.round(target*(1-Math.pow(1-pr,3)));if(pr<1)requestAnimationFrame(step);}
+    requestAnimationFrame(step);
+  });
+}
+
 /* ====== KPI de service (cockpit transverse) ====== */
 function kpiCard(ic,label,value,suffix,variant,raw){
   const inner = raw!==undefined ? raw : `<span data-countup="${value}">0</span>${suffix||''}`;
@@ -1156,6 +1246,7 @@ async function renderKPI(){
   let allTasks=[],allDocs=[];
   try{[allTasks,allDocs]=await Promise.all([api('/api/tasks'),api('/api/documents')]);}
   catch(e){el.innerHTML='<div class="empty">Erreur : '+esc(e.message)+'</div>';return;}
+  allTasksCache=allTasks;
 
   // --- Calculs ---
   const total=allTasks.length;

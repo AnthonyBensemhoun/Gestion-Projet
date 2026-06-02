@@ -3,7 +3,7 @@
 const ME = window.CURRENT_USER;
 const IS_ADMIN = ME.is_admin;
 let state = {
-  projects: [], tasks: [], users: [], absences: [], alerts: [], documents: [],
+  projects: [], tasks: [], users: [], absences: [], alerts: [], documents: [], notifications: [], notifUnread: 0,
   currentProject: localStorage.getItem('atelier_curproj') || null,
   filterStatus: 'all'
 };
@@ -77,9 +77,17 @@ async function loadAll(){
       state.alerts = await api('/api/alerts');
       await loadProjectTags();
     }
+    await loadNotifications();
     renderFilterAssigneeOpts();
     renderAll();
   }catch(e){alert('Erreur de chargement : '+e.message);}
+}
+async function loadNotifications(){
+  try{
+    const r=await api('/api/notifications');
+    state.notifications=r.items||[];
+    state.notifUnread=r.unread||0;
+  }catch{state.notifications=[];state.notifUnread=0;}
 }
 
 /* ====== Render ====== */
@@ -878,22 +886,67 @@ function applyFilters(){
 }
 
 /* ====== Cloche notifications (A3) ====== */
+const NOTIF_IC={doc_assigned:'📄',mention:'💬'};
+function fmtAgo(iso){
+  if(!iso)return '';
+  const diff=(Date.now()-new Date(iso).getTime())/1000;
+  if(diff<60)return "à l'instant";
+  if(diff<3600)return Math.floor(diff/60)+' min';
+  if(diff<86400)return Math.floor(diff/3600)+' h';
+  return Math.floor(diff/86400)+' j';
+}
 function renderNotifBell(){
-  const count=state.alerts.length;
+  const count=(state.notifUnread||0)+state.alerts.length;
   const badge=$('notifCount');
   if(badge){badge.textContent=count;badge.classList.toggle('hidden',count===0);}
 }
-function toggleNotifDropdown(){
+async function toggleNotifDropdown(){
   const dd=$('notifDropdown');
+  const willOpen=dd.classList.contains('hidden');
   dd.classList.toggle('hidden');
-  if(!dd.classList.contains('hidden')){
-    dd.innerHTML=state.alerts.length?state.alerts.slice(0,8).map(a=>`
+  if(!willOpen)return;
+  dd.innerHTML='<div class="notif-empty">Chargement…</div>';
+  await loadNotifications();
+  renderNotifBell();
+  let html='';
+  // Notifications personnelles
+  if(state.notifications.length){
+    html+='<div class="notif-sec">Pour toi</div>';
+    html+=state.notifications.slice(0,12).map(n=>`
+      <div class="notif-item ${n.read?'':'unread'}" data-notif="${n.id}" data-notif-doc="${n.doc_id||''}" data-notif-task="${n.task_id||''}">
+        <div class="notif-title">${NOTIF_IC[n.kind]||'🔔'} ${esc(n.title)}</div>
+        <div class="notif-msg">${esc((n.body||'').split('\n')[0])}</div>
+        <div class="notif-time">${fmtAgo(n.created_at)}</div>
+      </div>`).join('');
+  }
+  // Alertes projet
+  if(state.alerts.length){
+    html+='<div class="notif-sec">Alertes projet</div>';
+    html+=state.alerts.slice(0,8).map(a=>`
       <div class="notif-item alert ${a.type}" data-ack="${a.key}">
         <div class="notif-title">${esc(a.title)}</div>
         <div class="notif-msg">${esc(a.msg)}</div>
-      </div>`).join(''):'<div class="notif-empty">🎉 Aucune alerte active</div>';
-    dd.querySelectorAll('[data-ack]').forEach(el=>el.addEventListener('click',()=>{ackAlert(el.dataset.ack);dd.classList.add('hidden');}));
+      </div>`).join('');
   }
+  if(!html) html='<div class="notif-empty">🎉 Rien à signaler</div>';
+  else if(state.notifUnread>0) html='<div class="notif-head"><span>Notifications</span><button class="btn sm ghost" id="notifReadAll">Tout marquer lu</button></div>'+html;
+  dd.innerHTML=html;
+  // Wiring
+  dd.querySelectorAll('[data-ack]').forEach(el=>el.addEventListener('click',()=>{ackAlert(el.dataset.ack);dd.classList.add('hidden');}));
+  dd.querySelectorAll('[data-notif]').forEach(el=>el.addEventListener('click',async()=>{
+    const id=el.dataset.notif, docId=el.dataset.notifDoc, taskId=el.dataset.notifTask;
+    try{await api('/api/notifications/read',{method:'POST',body:{id:parseInt(id,10)}});}catch{}
+    dd.classList.add('hidden');
+    await loadNotifications();renderNotifBell();
+    if(docId){tab('docs');openDocDetail(docId);}
+    else if(taskId){openTask(taskId);}
+  }));
+  const ra=$('notifReadAll');
+  if(ra) ra.addEventListener('click',async(e)=>{
+    e.stopPropagation();
+    try{await api('/api/notifications/read',{method:'POST',body:{}});}catch{}
+    await loadNotifications();renderNotifBell();toggleNotifDropdown();toggleNotifDropdown();
+  });
 }
 document.addEventListener('click',e=>{
   if(!e.target.closest('#btnNotif') && !e.target.closest('#notifDropdown'))
@@ -1589,18 +1642,24 @@ async function docTransition(){
   const ph=DOC_PHASE_BY_KEY[phase];
   try{
     const r=await api('/api/documents/'+currentDocId+'/transition',{method:'POST',
-      body:{phase, assigned_to: assigneeVal?parseInt(assigneeVal,10):null, note}});
+      body:{phase, assigned_to: assigneeVal?parseInt(assigneeVal,10):null, note, notify}});
     toast('Document déplacé en « '+(ph?ph.label:phase)+' »');
-    // Notification email via Outlook (mailto)
-    if(notify && r.assignee_email){
-      const docName=currentDocObj?currentDocObj.name:'document';
-      const appUrl=window.location.origin;
-      const subject=`[Document qualité] ${docName} — ${ph?ph.label:phase} : action requise`;
-      const body=`Bonjour ${(r.assignee_name||'').split(' ')[0]},\n\nLe document « ${docName} » vient de passer en phase « ${ph?ph.label:phase} » et t'a été assigné pour action / revue.\n${note?'\nNote : '+note+'\n':''}\nAccède à l'application pour le consulter :\n${appUrl}\n\nMerci,\n${ME.name}`;
-      window.location.href='mailto:'+encodeURIComponent(r.assignee_email)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
+    // Email : serveur (Resend/SMTP) si configuré, sinon repli Outlook (mailto)
+    if(notify && assigneeVal && r.assignee_email){
+      if(r.emailed){
+        toast('📧 Email envoyé automatiquement à '+(r.assignee_name||r.assignee_email));
+      }else{
+        // pas d'envoi serveur → repli mailto (ouvre Outlook)
+        const docName=currentDocObj?currentDocObj.name:'document';
+        const appUrl=window.location.origin;
+        const subject=`[Document qualité] ${docName} — ${ph?ph.label:phase} : action requise`;
+        const body=`Bonjour ${(r.assignee_name||'').split(' ')[0]},\n\nLe document « ${docName} » vient de passer en phase « ${ph?ph.label:phase} » et t'a été assigné pour action / revue.\n${note?'\nNote : '+note+'\n':''}\nAccède à l'application pour le consulter :\n${appUrl}\n\nMerci,\n${ME.name}`;
+        window.location.href='mailto:'+encodeURIComponent(r.assignee_email)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
+      }
     }else if(notify && assigneeVal && !r.assignee_email){
-      toast("Pas d'email pour cette personne — notification non envoyée.",'warn');
+      toast("Pas d'email pour cette personne — notification in-app seulement.",'warn');
     }
+    await loadNotifications();renderNotifBell();
     openDocDetail(currentDocId);
     renderDocs();
   }catch(e){toast(e.message,'err');}
@@ -1806,10 +1865,17 @@ function renderSubtaskList(subtasks, taskId){
     catch(e){toast(e.message,'err');}
   }));
 }
+function highlightMentions(escaped){
+  state.users.forEach(u=>{const tag='@'+esc(u.name);if(escaped.includes(tag))escaped=escaped.split(tag).join('<span class="mention-tag">'+tag+'</span>');});
+  return escaped;
+}
+function extractMentions(text){
+  const ids=[];state.users.forEach(u=>{if(text.includes('@'+u.name))ids.push(u.id);});return ids;
+}
 function renderCommentList(comments){
   $('commentList').innerHTML=comments.length?comments.map(c=>`<div class="comment-item">
     <div class="comment-header"><span class="comment-author">${esc(c.author)}</span><div class="row" style="gap:8px"><span class="comment-date">${fmtDate(c.created_at.slice(0,10))}</span>${(ME.role==='admin'||c.user_id===ME.id)?`<button class="x" style="font-size:12px" data-del-comment="${c.id}">✕</button>`:''}</div></div>
-    <div class="comment-text">${esc(c.text)}</div>
+    <div class="comment-text">${highlightMentions(esc(c.text))}</div>
   </div>`).join(''):'<div style="color:var(--mut);font-size:13px;font-style:italic">Aucun commentaire.</div>';
   if(currentEditTaskId) $('commentList').querySelectorAll('[data-del-comment]').forEach(btn=>btn.addEventListener('click',async function(){
     try{await api('/api/comments/'+this.dataset.delComment,{method:'DELETE'});
@@ -1935,18 +2001,50 @@ if($('btnAddSubtask')) $('btnAddSubtask').addEventListener('click',async functio
 });
 if($('f_subtaskTitle')) $('f_subtaskTitle').addEventListener('keydown',e=>{if(e.key==='Enter' && $('btnAddSubtask')) $('btnAddSubtask').click();});
 
-// Commentaires
+// Commentaires + @mentions
 if($('btnAddComment')) $('btnAddComment').addEventListener('click',async function(){
   const text=$('f_commentText').value.trim();
   if(!text||!currentEditTaskId)return;
   try{
-    await api('/api/tasks/'+currentEditTaskId+'/comments',{method:'POST',body:{text}});
+    const mentions=extractMentions(text);
+    await api('/api/tasks/'+currentEditTaskId+'/comments',{method:'POST',body:{text,mentions}});
     $('f_commentText').value='';
     const cs=await api('/api/tasks/'+currentEditTaskId+'/comments');
     renderCommentList(cs);
-    toast('Commentaire ajouté');
+    toast(mentions.length?`Commentaire ajouté · ${mentions.length} personne(s) notifiée(s)`:'Commentaire ajouté');
   }catch(e){toast(e.message,'err');}
 });
+// Autocomplétion @ dans le champ commentaire
+let _mentionBox=null;
+function hideMentionBox(){if(_mentionBox)_mentionBox.classList.add('hidden');}
+function showMentionBox(input){
+  const val=input.value, caret=input.selectionStart;
+  const m=val.slice(0,caret).match(/@([\wÀ-ÿ'-]*)$/);
+  if(!m){hideMentionBox();return;}
+  const q=m[1].toLowerCase();
+  let users=state.users.filter(u=>u.id!==ME.id);
+  if(q) users=users.filter(u=>u.name.toLowerCase().includes(q));
+  users=users.slice(0,6);
+  if(!users.length){hideMentionBox();return;}
+  if(!_mentionBox){_mentionBox=document.createElement('div');_mentionBox.className='mention-box';document.body.appendChild(_mentionBox);}
+  _mentionBox.innerHTML=users.map(u=>`<div class="mention-opt" data-uid="${u.id}"><span class="ava" style="width:22px;height:22px;font-size:10px;background:${avaColor(u.id)}">${initials(u.name)}</span>${esc(u.name)}</div>`).join('');
+  const r=input.getBoundingClientRect();
+  _mentionBox.style.left=r.left+'px';_mentionBox.style.top=(r.bottom+4)+'px';_mentionBox.style.width=Math.max(210,r.width)+'px';
+  _mentionBox.classList.remove('hidden');
+  _mentionBox.querySelectorAll('.mention-opt').forEach(opt=>opt.addEventListener('mousedown',ev=>{
+    ev.preventDefault();
+    const u=userById(parseInt(opt.dataset.uid,10));if(!u)return;
+    const start=caret-m[0].length;
+    input.value=val.slice(0,start)+'@'+u.name+' '+val.slice(caret);
+    hideMentionBox();input.focus();
+    const np=start+u.name.length+2;input.setSelectionRange(np,np);
+  }));
+}
+if($('f_commentText')){
+  $('f_commentText').addEventListener('input',function(){showMentionBox(this);});
+  $('f_commentText').addEventListener('blur',()=>setTimeout(hideMentionBox,150));
+  $('f_commentText').addEventListener('keydown',e=>{if(e.key==='Escape')hideMentionBox();});
+}
 
 // avatar utilisateur dans la barre du haut
 $('meAva').style.background=avaColor(ME.id);

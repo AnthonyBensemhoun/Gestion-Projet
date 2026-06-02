@@ -160,6 +160,17 @@ class AuditLog(SQLModel, table=True):
     details: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+class Notification(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)        # destinataire
+    kind: str = ""                          # doc_assigned / mention / ...
+    title: str = ""
+    body: str = ""
+    doc_id: Optional[int] = Field(default=None)
+    task_id: Optional[int] = Field(default=None)
+    read: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
 # ---------------- Helpers ----------------
 def get_session():
     with Session(engine) as s:
@@ -188,6 +199,13 @@ def get_current_user(request: Request, s: Session = Depends(get_session)) -> Opt
 
 def _audit(s: Session, user_name: str, action: str, details: str = ""):
     s.add(AuditLog(user_name=user_name, action=action, details=details))
+
+def _notify(s: Session, user_id, kind, title, body="", doc_id=None, task_id=None, actor_id=None):
+    """Crée une notification in-app (sauf si destinataire == acteur)."""
+    if not user_id or user_id == actor_id:
+        return
+    s.add(Notification(user_id=user_id, kind=kind, title=title, body=body,
+                       doc_id=doc_id, task_id=task_id))
 
 def _update_last_seen(user_id: int):
     try:
@@ -569,11 +587,26 @@ def list_comments(tid: int, u: User = Depends(require_user), s: Session = Depend
 
 @app.post("/api/tasks/{tid}/comments")
 def create_comment(tid: int, data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
-    if not s.get(Task, tid): raise HTTPException(404)
+    t = s.get(Task, tid)
+    if not t: raise HTTPException(404)
     text = data.get("text", "").strip()
     if not text: raise HTTPException(400, "Texte requis")
     c = Comment(task_id=tid, user_id=u.id, text=text)
-    s.add(c); s.commit(); s.refresh(c)
+    s.add(c)
+    # Notifications pour les personnes mentionnées (@)
+    mentions = data.get("mentions") or []
+    notified = set()
+    for mid in mentions:
+        try: mid = int(mid)
+        except (TypeError, ValueError): continue
+        if mid in notified or mid == u.id: continue
+        if s.get(User, mid):
+            _notify(s, mid, "mention",
+                    f"{u.name} t'a mentionné",
+                    f"Sur la tâche « {t.title} » :\n{text[:200]}",
+                    task_id=tid, actor_id=u.id)
+            notified.add(mid)
+    s.commit(); s.refresh(c)
     return {"id": c.id, "author": u.name, "text": c.text, "created_at": c.created_at.isoformat()}
 
 @app.delete("/api/comments/{cid}")
@@ -783,6 +816,29 @@ def ack_all(u: User = Depends(require_user), s: Session = Depends(get_session)):
     s.commit()
     return {"ok": True, "count": len(alerts)}
 
+# ---------------- API : Notifications in-app ----------------
+@app.get("/api/notifications")
+def list_notifications(u: User = Depends(require_user), s: Session = Depends(get_session)):
+    rows = s.exec(select(Notification).where(Notification.user_id == u.id)
+                 .order_by(Notification.created_at.desc()).limit(40)).all()
+    unread = sum(1 for n in rows if not n.read)
+    return {"unread": unread, "items": [{
+        "id": n.id, "kind": n.kind, "title": n.title, "body": n.body,
+        "doc_id": n.doc_id, "task_id": n.task_id, "read": n.read,
+        "created_at": n.created_at.isoformat(),
+    } for n in rows]}
+
+@app.post("/api/notifications/read")
+def mark_notifications_read(data: dict = None, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    data = data or {}
+    nid = data.get("id")
+    if nid:
+        s.execute(sa_update(Notification).where(Notification.id == nid, Notification.user_id == u.id).values(read=True))
+    else:
+        s.execute(sa_update(Notification).where(Notification.user_id == u.id, Notification.read == False).values(read=True))
+    s.commit()
+    return {"ok": True}
+
 # ---------------- API : Settings (branding) ----------------
 @app.get("/api/settings")
 def get_settings(s: Session = Depends(get_session)):
@@ -803,24 +859,43 @@ def get_audit(limit: int = 200, u: User = Depends(require_admin), s: Session = D
              "details": l.details, "created_at": l.created_at.isoformat()} for l in logs]
 
 # ---------------- Email ----------------
+# Fournisseur 1 (recommandé) : Resend (API HTTP, fonctionne sur Render)
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+EMAIL_FROM     = os.environ.get("EMAIL_FROM", "Helix <onboarding@resend.dev>")
+# Fournisseur 2 (repli) : SMTP classique
 SMTP_FROM    = os.environ.get("SMTP_FROM",    "manufacturingengineeringteam@alivedx.com")
 SMTP_SERVER  = os.environ.get("SMTP_SERVER",  "smtp.office365.com")
 SMTP_PORT    = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER    = os.environ.get("SMTP_USER",    SMTP_FROM)
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 
+def email_configured() -> bool:
+    return bool(RESEND_API_KEY or SMTP_PASSWORD)
+
 def _send_email(to: str, subject: str, body: str):
-    if not SMTP_PASSWORD:
-        raise ValueError("SMTP_PASSWORD non configuré")
-    msg = MIMEMultipart("alternative")
-    msg["From"]    = SMTP_FROM
-    msg["To"]      = to
-    msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain", "utf-8"))
-    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=10) as s:
-        s.ehlo(); s.starttls(); s.ehlo()
-        s.login(SMTP_USER, SMTP_PASSWORD)
-        s.sendmail(SMTP_FROM, [to], msg.as_string())
+    # 1) Resend (HTTP) — prioritaire
+    if RESEND_API_KEY:
+        import urllib.request
+        payload = json.dumps({
+            "from": EMAIL_FROM, "to": [to], "subject": subject, "text": body,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.resend.com/emails", data=payload, method="POST",
+            headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            r.read()
+        return
+    # 2) SMTP — repli
+    if SMTP_PASSWORD:
+        msg = MIMEMultipart("alternative")
+        msg["From"] = SMTP_FROM; msg["To"] = to; msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=10) as s:
+            s.ehlo(); s.starttls(); s.ehlo()
+            s.login(SMTP_USER, SMTP_PASSWORD)
+            s.sendmail(SMTP_FROM, [to], msg.as_string())
+        return
+    raise ValueError("Aucun fournisseur email configuré (RESEND_API_KEY ou SMTP_PASSWORD).")
 
 @app.post("/api/send-email")
 def send_email_endpoint(data: dict, u: User = Depends(require_user)):
@@ -949,6 +1024,10 @@ DOC_PHASE_STATUS = {  # statut "simple" dérivé de la phase (rétrocompat)
     "redaction": "draft", "revue_equipe": "review", "revue_qa": "review",
     "approbation": "review", "pret_qms": "approved",
 }
+DOC_PHASE_LABELS = {
+    "redaction": "Rédaction", "revue_equipe": "Revue équipe", "revue_qa": "Revue QA",
+    "approbation": "Approbation", "pret_qms": "Prêt pour QMS",
+}
 
 def _user_name(s: Session, uid):
     if not uid: return None
@@ -1017,16 +1096,41 @@ def transition_document(doc_id: int, data: dict, u: User = Depends(require_user)
     else:
         assigned_to = None
     note = (data.get("note") or "").strip()
+    notify = bool(data.get("notify"))
+    phase_lbl = DOC_PHASE_LABELS.get(phase, phase)
     s.execute(sa_update(Document).where(Document.id == doc_id).values(
         phase=phase, assigned_to=assigned_to, status=DOC_PHASE_STATUS.get(phase, d.status)))
     s.add(DocWorkflowEvent(document_id=doc_id, phase=phase, assigned_to=assigned_to,
                            moved_by=u.id, note=note))
     _audit(s, u.name, "Transition document", f"{d.name} → {phase}"
            + (f" (chez {_user_name(s, assigned_to)})" if assigned_to else ""))
+    # Notification in-app pour la personne assignée
+    if assigned_to and assigned_to != u.id:
+        _notify(s, assigned_to, "doc_assigned",
+                f"Document assigné : {d.name}",
+                f"« {d.name} » est passé en phase « {phase_lbl} » et requiert ton action."
+                + (f"\nNote : {note}" if note else ""),
+                doc_id=doc_id, actor_id=u.id)
     s.commit()
-    # infos pour la notification email côté client (mailto)
+    # Envoi email serveur (Resend/SMTP) si demandé
     target = s.get(User, assigned_to) if assigned_to else None
-    return {"ok": True, "phase": phase,
+    emailed = False
+    if notify and target and target.email and target.id != u.id:
+        try:
+            app_url = os.environ.get("APP_URL", "")
+            subject = f"[{_setting(s,'app_name','Helix')}] {d.name} — {phase_lbl} : action requise"
+            body = (f"Bonjour {target.name.split(' ')[0]},\n\n"
+                    f"Le document « {d.name} » vient de passer en phase « {phase_lbl} » "
+                    f"et t'a été assigné pour action / revue.\n"
+                    + (f"\nNote : {note}\n" if note else "")
+                    + (f"\nAccéder à l'application : {app_url}\n" if app_url else "")
+                    + f"\nCordialement,\n{u.name}")
+            _send_email(target.email, subject, body)
+            emailed = True
+        except Exception as e:
+            print(f"[Helix] Email transition non envoyé : {e}")
+    return {"ok": True, "phase": phase, "emailed": emailed,
+            "email_configured": email_configured(),
             "assignee_email": target.email if target else None,
             "assignee_name": target.name if target else None}
 

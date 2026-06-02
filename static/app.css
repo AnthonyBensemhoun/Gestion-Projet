@@ -215,14 +215,17 @@ kbd{font-family:'Space Grotesk',monospace;font-size:10px;background:var(--panel2
 
 /* ---- VISITE GUIDÉE ---- */
 .tour-overlay{position:fixed;inset:0;z-index:200;pointer-events:none}
-.tour-spot{position:fixed;border-radius:12px;box-shadow:0 0 0 9999px rgba(15,23,42,.6);transition:all .35s cubic-bezier(.4,0,.2,1);pointer-events:none}
-.tour-pop{position:fixed;z-index:201;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow-lg);width:300px;padding:18px;pointer-events:auto;animation:fadeIn .2s ease}
-.tour-pop.center{left:50%!important;top:50%!important;transform:translate(-50%,-50%)!important;width:400px;text-align:center}
-.tour-pop h4{margin:0 0 7px;font-size:16px;font-weight:700}
-.tour-pop p{margin:0 0 14px;font-size:13.5px;color:var(--mut);line-height:1.55}
-.tour-actions{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.tour-spot{position:fixed;border-radius:12px;box-shadow:0 0 0 9999px rgba(15,23,42,.78),0 0 0 3px var(--acc),0 0 24px 4px rgba(79,70,229,.55);transition:all .35s cubic-bezier(.4,0,.2,1);pointer-events:none}
+.tour-pop{position:fixed;z-index:201;background:var(--panel);border:2px solid var(--acc);border-radius:18px;box-shadow:0 24px 60px -12px rgba(15,23,42,.55),0 0 0 1px rgba(79,70,229,.15);width:400px;padding:26px 28px;pointer-events:auto;animation:fadeIn .2s ease}
+.tour-pop.center{left:50%!important;top:50%!important;transform:translate(-50%,-50%)!important;width:520px;text-align:center;padding:34px 36px}
+.tour-pop h4{margin:0 0 12px;font-size:24px;font-weight:800;line-height:1.25;font-family:'Space Grotesk','Inter',sans-serif;letter-spacing:-.4px}
+.tour-pop.center h4{font-size:28px}
+.tour-pop p{margin:0 0 20px;font-size:18px;color:var(--ink);line-height:1.6}
+.tour-pop p strong{color:var(--acc);font-weight:700}
+.tour-actions{display:flex;justify-content:space-between;align-items:center;gap:10px}
 .tour-pop.center .tour-actions{justify-content:center}
-.tour-progress{font-size:11px;color:var(--mut);font-weight:600}
+.tour-actions .btn{font-size:16px;padding:10px 20px}
+.tour-progress{font-size:14px;color:var(--mut);font-weight:700}
 
 @media(max-width:900px){
   .sidebar{position:fixed;left:0;top:0;transform:translateX(-100%);transition:transform var(--t-smooth);box-shadow:var(--shadow-lg)}

@@ -150,8 +150,20 @@ kbd{font-family:'Space Grotesk',monospace;font-size:10px;background:var(--panel2
 .only-mobile{display:none}
 
 /* ---- SIDEBAR NAV ---- */
-.side-nav{flex:1;overflow-y:auto;padding:8px 12px 12px;display:flex;flex-direction:column;gap:2px}
-.side-group{font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--mut);padding:14px 12px 5px;opacity:.85}
+.side-nav{flex:1;overflow-y:auto;padding:6px 12px 12px;display:flex;flex-direction:column;gap:3px}
+.side-group{
+  display:flex;align-items:center;gap:8px;
+  font-size:11px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;
+  color:var(--ink);
+  padding:9px 10px 7px;margin-top:14px;
+  border-top:1px solid var(--line);
+}
+.side-group:first-child{margin-top:2px;border-top:none}
+.side-group::before{
+  content:'';width:7px;height:7px;border-radius:2px;flex-shrink:0;
+  background:linear-gradient(135deg,var(--acc),var(--acc2));
+  box-shadow:0 0 0 3px rgba(79,70,229,.10);
+}
 .side-nav .tab{
   display:flex;align-items:center;gap:11px;
   padding:9px 12px;border-radius:10px;cursor:pointer;

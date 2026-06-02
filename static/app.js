@@ -507,7 +507,7 @@ async function remindTask(taskId){
 /* ====== Navigation ====== */
 function tab(name){
   document.querySelectorAll('nav .tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));
-  ['dash','synth','tasks','team','absence','alerts','kanban','cal','list','docs','capacity','audit'].forEach(s=>{
+  ['dash','kpi','synth','tasks','team','absence','alerts','kanban','cal','list','docs','capacity','audit'].forEach(s=>{
     const el=$('sec-'+s);
     if(!el) return;
     if(s===name){
@@ -520,6 +520,7 @@ function tab(name){
     }
   });
   if(name==='docs') renderDocs();
+  if(name==='kpi') renderKPI();
 }
 function openModal(id){fillSelects();$(id).classList.add('show');}
 function closeModal(id){$(id).classList.remove('show');}
@@ -1138,6 +1139,133 @@ async function renderAudit(){
       </tr>`;
     }).join('');
   }catch(e){if($('auditBody'))$('auditBody').innerHTML='<tr><td colspan="4" class="empty">Erreur chargement</td></tr>';}
+}
+
+/* ====== KPI de service (cockpit transverse) ====== */
+function kpiCard(ic,label,value,suffix,variant,raw){
+  const inner = raw!==undefined ? raw : `<span data-countup="${value}">0</span>${suffix||''}`;
+  return `<div class="kpi-card ${variant||''}">
+    <div class="kpi-ic">${ic}</div>
+    <div class="kpi-val">${inner}</div>
+    <div class="kpi-lbl">${label}</div>
+  </div>`;
+}
+async function renderKPI(){
+  const el=$('kpiContent');if(!el)return;
+  el.innerHTML='<div class="empty">Chargement…</div>';
+  let allTasks=[],allDocs=[];
+  try{[allTasks,allDocs]=await Promise.all([api('/api/tasks'),api('/api/documents')]);}
+  catch(e){el.innerHTML='<div class="empty">Erreur : '+esc(e.message)+'</div>';return;}
+
+  // --- Calculs ---
+  const total=allTasks.length;
+  const done=allTasks.filter(t=>t.status==='done').length;
+  const prog=allTasks.filter(t=>t.status==='prog').length;
+  const completion=total?Math.round(done/total*100):0;
+  const late=allTasks.filter(isLate).length;
+  const dueWeek=allTasks.filter(t=>t.status!=='done'&&t.due_date&&daysBetween(today(),t.due_date)>=0&&daysBetween(today(),t.due_date)<=7).length;
+
+  // Charge par membre (modèle intelligent, tous projets)
+  const loads=state.users.map(u=>{
+    const tks=allTasks.filter(t=>t.assignee_id===u.id&&t.status!=='done');
+    let imminent=0,backlog=0;
+    tks.forEach(t=>{const rem=taskRemainingHours(t);backlog+=rem;if(t.due_date){const dd=daysBetween(today(),t.due_date);if(dd<=CAP_CONFIG.horizonDays)imminent+=rem*taskUrgencyWeight(t);}});
+    const avail=availableHoursInHorizon(u.id);
+    const pct=avail>0?Math.round(imminent/avail*100):(imminent>0?200:0);
+    return {u,pct,backlog};
+  });
+  const avgLoad=loads.length?Math.round(loads.reduce((s,l)=>s+l.pct,0)/loads.length):0;
+  const overloaded=loads.filter(l=>l.pct>110).length;
+  const availMembers=state.users.filter(u=>!isAbsentNow(u.id)).length;
+
+  // Documents par phase
+  const phaseCounts={};DOC_PHASES.forEach(p=>phaseCounts[p.key]=0);
+  allDocs.forEach(d=>{const ph=d.phase||'redaction';phaseCounts[ph]=(phaseCounts[ph]||0)+1;});
+  const readyQMS=phaseCounts['pret_qms']||0;
+  const awaitingReview=(phaseCounts['revue_qa']||0)+(phaseCounts['approbation']||0);
+
+  // Projets à risque (au moins une tâche en retard)
+  const projRisk=state.projects.filter(p=>allTasks.some(t=>t.project_id==p.id&&isLate(t))).length;
+  const alerts=(state.alerts||[]).length;
+
+  // --- Cartes héro ---
+  const loadVar=avgLoad>110?'bad':avgLoad>=85?'warn':'ok';
+  const hero=`<div class="kpi-hero">
+    ${kpiCard('📁','Projets actifs',state.projects.length,'','info')}
+    ${kpiCard('✅','Complétion globale',completion,'%','ok')}
+    ${kpiCard('⏰','Tâches en retard',late,'',late>0?'bad':'ok')}
+    ${kpiCard('🔄','Tâches en cours',prog,'','info')}
+    ${kpiCard('📅','Échéances à 7 jours',dueWeek,'',dueWeek>0?'warn':'ok')}
+    ${kpiCard('💪','Charge équipe moy.',avgLoad,'%',loadVar)}
+    ${kpiCard('🟢','Membres dispo. auj.','','','ok',`${availMembers}<span style="font-size:18px;color:var(--mut)">/${state.users.length}</span>`)}
+    ${kpiCard('🚀','Docs prêts QMS',readyQMS,'','teal')}
+    ${kpiCard('🔬','Docs en revue QA',awaitingReview,'',awaitingReview>0?'warn':'ok')}
+    ${kpiCard('⚠️','Projets à risque',projRisk,'',projRisk>0?'bad':'ok')}
+  </div>`;
+
+  // --- Avancement par projet ---
+  const projRows=state.projects.map(p=>{
+    const pts=allTasks.filter(t=>t.project_id==p.id);
+    const dn=pts.filter(t=>t.status==='done').length;
+    const pc=pts.length?Math.round(dn/pts.length*100):0;
+    const lt=pts.filter(isLate).length;
+    return `<div style="margin-bottom:11px">
+      <div class="row" style="justify-content:space-between;font-size:13px;margin-bottom:3px">
+        <strong>${esc(p.name)}</strong>
+        <span class="meta">${pc}% · ${dn}/${pts.length}${lt?` · <span style="color:var(--bad)">${lt} en retard</span>`:''}</span>
+      </div>
+      <div class="progress"><i style="width:${pc}%"></i></div>
+    </div>`;
+  }).join('')||'<div class="empty">Aucun projet</div>';
+
+  // --- Workflow documentaire (barres par phase) ---
+  const maxPhase=Math.max(1,...DOC_PHASES.map(p=>phaseCounts[p.key]||0));
+  const wfRows=DOC_PHASES.map(p=>{
+    const n=phaseCounts[p.key]||0;
+    return `<div style="margin-bottom:9px">
+      <div class="row" style="justify-content:space-between;font-size:12.5px;margin-bottom:3px">
+        <span>${p.ic} ${p.label}</span><strong>${n}</strong>
+      </div>
+      <div class="capacity-bar-wrap" style="height:8px"><div class="capacity-bar-fill ok" style="width:${Math.round(n/maxPhase*100)}%;background:${p.color}"></div></div>
+    </div>`;
+  }).join('');
+
+  // --- Charge par membre (top chargés) ---
+  const loadRows=loads.slice().sort((a,b)=>b.pct-a.pct).slice(0,8).map(l=>{
+    const cls=loadClass(l.pct);const col=l.pct>110?'var(--bad)':l.pct>=85?'var(--warn)':'var(--ok)';
+    return `<div style="margin-bottom:9px">
+      <div class="row" style="justify-content:space-between;font-size:12.5px;margin-bottom:3px">
+        <span class="row" style="gap:6px"><span class="ava" style="width:20px;height:20px;font-size:9px;background:${avaColor(l.u.id)}">${initials(l.u.name)}</span>${esc(l.u.name)}</span>
+        <strong style="color:${col}">${l.pct}%</strong>
+      </div>
+      <div class="capacity-bar-wrap" style="height:7px"><div class="capacity-bar-fill ${cls}" style="width:${Math.min(100,l.pct)}%"></div></div>
+    </div>`;
+  }).join('')||'<div class="empty">Aucun membre</div>';
+
+  // --- Échéances à venir (7j, tous projets) ---
+  const soon=allTasks.filter(t=>t.status!=='done'&&t.due_date&&daysBetween(today(),t.due_date)>=0&&daysBetween(today(),t.due_date)<=7)
+    .sort((a,b)=>a.due_date<b.due_date?-1:1).slice(0,8);
+  const soonRows=soon.map(t=>{
+    const p=projById(t.project_id);
+    return `<div class="row" style="justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:12.5px">
+      <span data-edit-task="${t.id}" style="cursor:pointer;font-weight:600">${esc(t.title)}</span>
+      <span class="meta" style="white-space:nowrap">${p?esc(p.name)+' · ':''}${fmtDate(t.due_date)}</span>
+    </div>`;
+  }).join('')||'<div class="empty">Aucune échéance dans les 7 jours 🎉</div>';
+
+  el.innerHTML=hero+`<div class="kpi-grid2">
+    <div class="panel"><div class="sec-h" style="margin-bottom:10px"><h2 style="font-size:15px">📊 Avancement par projet</h2></div>${projRows}</div>
+    <div class="panel"><div class="sec-h" style="margin-bottom:10px"><h2 style="font-size:15px">🗂 Workflow documentaire</h2></div>${wfRows}</div>
+    <div class="panel"><div class="sec-h" style="margin-bottom:10px"><h2 style="font-size:15px">💪 Charge par membre</h2></div>${loadRows}</div>
+    <div class="panel"><div class="sec-h" style="margin-bottom:10px"><h2 style="font-size:15px">📅 Échéances à venir (7 j)</h2></div>${soonRows}</div>
+  </div>`;
+
+  // Animation count-up
+  el.querySelectorAll('[data-countup]').forEach(node=>{
+    const target=parseFloat(node.dataset.countup)||0;const start=performance.now();const dur=850;
+    function step(now){const pr=Math.min(1,(now-start)/dur);node.textContent=Math.round(target*(1-Math.pow(1-pr,3)));if(pr<1)requestAnimationFrame(step);}
+    requestAnimationFrame(step);
+  });
 }
 
 /* ====== Documents qualité ====== */

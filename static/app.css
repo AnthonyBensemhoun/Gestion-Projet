@@ -475,6 +475,27 @@ input[type=checkbox]{accent-color:var(--acc);width:16px;height:16px;cursor:point
 @keyframes docPulse{0%,100%{box-shadow:0 0 0 5px rgba(79,70,229,.18)}50%{box-shadow:0 0 0 9px rgba(79,70,229,.05)}}
 .doc-holder{display:flex;align-items:center;gap:9px;background:var(--panel2);border-radius:var(--r-md,10px);padding:9px 12px;margin-top:6px;font-size:13px}
 
+/* ---- KPI SERVICE (cockpit) ---- */
+.kpi-hero{display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:14px;margin-bottom:20px}
+.kpi-card{
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--r-lg);
+  padding:15px 18px;position:relative;overflow:hidden;
+  transition:transform var(--t-med),box-shadow var(--t-med);
+  animation:kpiIn .5s cubic-bezier(.4,0,.2,1) both;
+}
+.kpi-card:hover{transform:translateY(-3px);box-shadow:var(--shadow)}
+.kpi-card::after{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--acc)}
+.kpi-card.ok::after{background:var(--ok)}
+.kpi-card.warn::after{background:var(--warn)}
+.kpi-card.bad::after{background:var(--bad)}
+.kpi-card.info::after{background:var(--info)}
+.kpi-card.teal::after{background:var(--acc2)}
+.kpi-ic{font-size:19px;margin-bottom:6px}
+.kpi-val{font-family:'Space Grotesk',sans-serif;font-size:31px;font-weight:700;line-height:1;letter-spacing:-1px}
+.kpi-lbl{font-size:12px;color:var(--mut);margin-top:5px;font-weight:600}
+@keyframes kpiIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.kpi-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+
 /* ---- KANBAN ---- */
 .kanban-board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start}
 @media(max-width:720px){.kanban-board{grid-template-columns:1fr}}

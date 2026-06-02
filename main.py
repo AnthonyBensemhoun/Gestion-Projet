@@ -124,13 +124,34 @@ class Document(SQLModel, table=True):
     project_id: Optional[int] = Field(default=None, index=True)  # None = document de service (global)
     name: str
     description: str = ""
+    doc_type: str = "DOC"      # SOP / PROTO / REPORT / FORM / IT / DOC
+    reference: str = ""        # référence auto : ex SOP-2026-014
     status: str = "draft"      # draft / review / approved (dérivé de la phase)
     phase: str = "redaction"   # workflow : redaction / revue_equipe / revue_qa / approbation / pret_qms
+    phase_since: Optional[datetime] = Field(default=None)  # entrée dans la phase actuelle (SLA)
     assigned_to: Optional[int] = Field(default=None)  # personne chez qui le document se trouve actuellement
     locked_by: Optional[int] = Field(default=None)   # user_id ayant verrouillé pour édition
     locked_at: Optional[datetime] = Field(default=None)
     created_by: Optional[int] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class DocSignature(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    document_id: int = Field(index=True)
+    user_id: Optional[int] = Field(default=None)
+    user_name: str = ""        # snapshot immuable du signataire
+    phase: str = ""            # phase signée
+    meaning: str = ""          # signification (ex : Approbation, Prêt pour QMS)
+    reason: str = ""           # motif saisi
+    version: int = 0           # n° de version signé
+    signed_at: datetime = Field(default_factory=datetime.utcnow)
+
+class DocAck(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    document_id: int = Field(index=True)
+    user_id: int = Field(index=True)
+    version: int = 0           # version accusée
+    acknowledged_at: datetime = Field(default_factory=datetime.utcnow)
 
 class DocWorkflowEvent(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -256,6 +277,12 @@ def on_startup():
              "ALTER TABLE document ADD COLUMN phase VARCHAR DEFAULT 'redaction'"),
             ('ALTER TABLE document ADD COLUMN IF NOT EXISTS assigned_to INTEGER',
              "ALTER TABLE document ADD COLUMN assigned_to INTEGER"),
+            ("ALTER TABLE document ADD COLUMN IF NOT EXISTS doc_type VARCHAR DEFAULT 'DOC'",
+             "ALTER TABLE document ADD COLUMN doc_type VARCHAR DEFAULT 'DOC'"),
+            ("ALTER TABLE document ADD COLUMN IF NOT EXISTS reference VARCHAR DEFAULT ''",
+             "ALTER TABLE document ADD COLUMN reference VARCHAR DEFAULT ''"),
+            ('ALTER TABLE document ADD COLUMN IF NOT EXISTS phase_since TIMESTAMP',
+             "ALTER TABLE document ADD COLUMN phase_since TIMESTAMP"),
         ]
         for pg_stmt, sq_stmt in migrations:
             try:
@@ -1028,37 +1055,77 @@ DOC_PHASE_LABELS = {
     "redaction": "Rédaction", "revue_equipe": "Revue équipe", "revue_qa": "Revue QA",
     "approbation": "Approbation", "pret_qms": "Prêt pour QMS",
 }
+# Types de documents (préfixe de référence)
+DOC_TYPES = {
+    "SOP": "SOP", "PROTO": "Protocole", "REPORT": "Rapport",
+    "FORM": "Formulaire", "IT": "Instruction", "DOC": "Document",
+}
+# Délai indicatif max par phase (jours) — au-delà : alerte SLA (goulot)
+DOC_SLA_DAYS = {
+    "redaction": 14, "revue_equipe": 5, "revue_qa": 7, "approbation": 5, "pret_qms": 0,
+}
+# Phases nécessitant une signature électronique (mot de passe + motif)
+DOC_SIGN_PHASES = ("approbation", "pret_qms")
+
+def _next_doc_reference(s: Session, doc_type: str) -> str:
+    prefix = doc_type if doc_type in DOC_TYPES else "DOC"
+    year = datetime.utcnow().year
+    pat = f"{prefix}-{year}-"
+    existing = s.exec(select(Document).where(Document.reference.startswith(pat))).all()
+    nums = []
+    for d in existing:
+        try: nums.append(int((d.reference or "").rsplit("-", 1)[-1]))
+        except (ValueError, IndexError): pass
+    nxt = (max(nums) + 1) if nums else 1
+    return f"{pat}{nxt:03d}"
 
 def _user_name(s: Session, uid):
     if not uid: return None
     u = s.get(User, uid)
     return u.name if u else None
 
-def _doc_dict(s: Session, d: Document, versions=None):
+def _doc_dict(s: Session, d: Document, versions=None, me_id=None):
     if versions is None:
         versions = s.exec(select(DocumentVersion).where(DocumentVersion.document_id == d.id)
                           .order_by(DocumentVersion.version.desc())).all()
     cur = versions[0] if versions else None
+    cur_ver = cur.version if cur else 0
+    phase = d.phase or "redaction"
+    # SLA : jours dans la phase actuelle
+    since = d.phase_since or d.created_at
+    days_in_phase = (datetime.utcnow() - since).days if since else 0
+    sla_days = DOC_SLA_DAYS.get(phase, 0)
+    sla_over = bool(sla_days and days_in_phase > sla_days)
+    # Signatures + accusés de lecture (version courante)
+    sign_count = len(s.exec(select(DocSignature).where(DocSignature.document_id == d.id)).all())
+    acks = s.exec(select(DocAck).where(DocAck.document_id == d.id, DocAck.version == cur_ver)).all()
+    my_ack = bool(me_id and any(a.user_id == me_id for a in acks))
     return {
         "id": d.id, "name": d.name, "description": d.description,
+        "doc_type": d.doc_type or "DOC", "reference": d.reference or "",
         "status": d.status, "project_id": d.project_id,
-        "phase": d.phase or "redaction",
+        "phase": phase,
+        "phase_since": since.isoformat() if since else None,
+        "days_in_phase": days_in_phase, "sla_days": sla_days, "sla_over": sla_over,
         "assigned_to": d.assigned_to, "assigned_to_name": _user_name(s, d.assigned_to),
         "locked_by": d.locked_by, "locked_by_name": _user_name(s, d.locked_by),
         "locked_at": d.locked_at.isoformat() if d.locked_at else None,
         "created_by": d.created_by, "created_by_name": _user_name(s, d.created_by),
         "created_at": d.created_at.isoformat() if d.created_at else None,
         "version_count": len(versions),
-        "last_version": cur.version if cur else 0,
+        "last_version": cur_ver,
         "last_modified_by": _user_name(s, cur.uploaded_by) if cur else None,
         "last_modified_at": cur.uploaded_at.isoformat() if cur and cur.uploaded_at else None,
         "last_filename": cur.filename if cur else None,
+        "sign_count": sign_count,
+        "ack_count": len(acks), "my_ack": my_ack,
+        "needs_ack": phase == "pret_qms",
     }
 
 @app.get("/api/documents")
 def list_documents(u: User = Depends(require_user), s: Session = Depends(get_session)):
     docs = s.exec(select(Document).order_by(Document.name)).all()
-    return [_doc_dict(s, d) for d in docs]
+    return [_doc_dict(s, d, me_id=u.id) for d in docs]
 
 @app.get("/api/documents/{doc_id}")
 def get_document(doc_id: int, u: User = Depends(require_user), s: Session = Depends(get_session)):
@@ -1066,7 +1133,7 @@ def get_document(doc_id: int, u: User = Depends(require_user), s: Session = Depe
     if not d: raise HTTPException(404, "Document introuvable")
     versions = s.exec(select(DocumentVersion).where(DocumentVersion.document_id == doc_id)
                      .order_by(DocumentVersion.version.desc())).all()
-    out = _doc_dict(s, d, versions)
+    out = _doc_dict(s, d, versions, me_id=u.id)
     out["versions"] = [{
         "id": v.id, "version": v.version, "filename": v.filename,
         "size": v.size, "note": v.note,
@@ -1080,6 +1147,18 @@ def get_document(doc_id: int, u: User = Depends(require_user), s: Session = Depe
         "moved_by_name": _user_name(s, w.moved_by), "note": w.note,
         "created_at": w.created_at.isoformat() if w.created_at else None,
     } for w in wf]
+    sigs = s.exec(select(DocSignature).where(DocSignature.document_id == doc_id)
+                 .order_by(DocSignature.signed_at.asc())).all()
+    out["signatures"] = [{
+        "user_name": sg.user_name, "meaning": sg.meaning, "reason": sg.reason,
+        "version": sg.version, "signed_at": sg.signed_at.isoformat() if sg.signed_at else None,
+    } for sg in sigs]
+    cur_ver = out["last_version"]
+    acks = s.exec(select(DocAck).where(DocAck.document_id == doc_id, DocAck.version == cur_ver)).all()
+    out["acks"] = [{
+        "user_name": _user_name(s, a.user_id),
+        "acknowledged_at": a.acknowledged_at.isoformat() if a.acknowledged_at else None,
+    } for a in acks]
     return out
 
 @app.post("/api/documents/{doc_id}/transition")
@@ -1096,10 +1175,24 @@ def transition_document(doc_id: int, data: dict, u: User = Depends(require_user)
     else:
         assigned_to = None
     note = (data.get("note") or "").strip()
-    notify = bool(data.get("notify"))
     phase_lbl = DOC_PHASE_LABELS.get(phase, phase)
+    # --- Signature électronique obligatoire (esprit 21 CFR Part 11) ---
+    if phase in DOC_SIGN_PHASES:
+        password = data.get("password") or ""
+        reason = (data.get("reason") or "").strip()
+        if not password or not reason:
+            raise HTTPException(400, "Signature requise : mot de passe et motif obligatoires pour cette phase.")
+        if not bcrypt.verify(password, u.password_hash):
+            raise HTTPException(403, "Signature refusée : mot de passe incorrect.")
+        cur = s.exec(select(DocumentVersion).where(DocumentVersion.document_id == doc_id)
+                    .order_by(DocumentVersion.version.desc())).first()
+        s.add(DocSignature(document_id=doc_id, user_id=u.id, user_name=u.name,
+                           phase=phase, meaning=phase_lbl, reason=reason,
+                           version=cur.version if cur else 0))
+        _audit(s, u.name, "Signature électronique", f"{d.name} — {phase_lbl} : {reason}")
     s.execute(sa_update(Document).where(Document.id == doc_id).values(
-        phase=phase, assigned_to=assigned_to, status=DOC_PHASE_STATUS.get(phase, d.status)))
+        phase=phase, assigned_to=assigned_to, phase_since=datetime.utcnow(),
+        status=DOC_PHASE_STATUS.get(phase, d.status)))
     s.add(DocWorkflowEvent(document_id=doc_id, phase=phase, assigned_to=assigned_to,
                            moved_by=u.id, note=note))
     _audit(s, u.name, "Transition document", f"{d.name} → {phase}"
@@ -1118,10 +1211,26 @@ def transition_document(doc_id: int, data: dict, u: User = Depends(require_user)
             "assignee_email": target.email if target else None,
             "assignee_name": target.name if target else None}
 
+@app.post("/api/documents/{doc_id}/ack")
+def ack_document(doc_id: int, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    d = s.get(Document, doc_id)
+    if not d: raise HTTPException(404, "Document introuvable")
+    cur = s.exec(select(DocumentVersion).where(DocumentVersion.document_id == doc_id)
+                .order_by(DocumentVersion.version.desc())).first()
+    ver = cur.version if cur else 0
+    existing = s.exec(select(DocAck).where(DocAck.document_id == doc_id,
+                      DocAck.user_id == u.id, DocAck.version == ver)).first()
+    if not existing:
+        s.add(DocAck(document_id=doc_id, user_id=u.id, version=ver))
+        _audit(s, u.name, "Accusé de lecture", f"{d.name} (v{ver})")
+        s.commit()
+    return {"ok": True}
+
 @app.post("/api/documents")
 async def create_document(
     name: str = Form(...), description: str = Form(""),
     project_id: Optional[int] = Form(None), note: str = Form(""),
+    doc_type: str = Form("DOC"),
     file: UploadFile = File(...),
     u: User = Depends(require_user), s: Session = Depends(get_session)):
     name = name.strip()
@@ -1132,9 +1241,12 @@ async def create_document(
     content = await file.read()
     if len(content) > DOC_MAX_SIZE:
         raise HTTPException(400, "Fichier trop volumineux (max 25 Mo)")
+    dtype = doc_type if doc_type in DOC_TYPES else "DOC"
+    reference = _next_doc_reference(s, dtype)
     d = Document(name=name, description=description.strip(),
                  project_id=project_id, created_by=u.id, status="draft",
-                 phase="redaction", assigned_to=u.id)
+                 phase="redaction", assigned_to=u.id,
+                 doc_type=dtype, reference=reference, phase_since=datetime.utcnow())
     s.add(d); s.commit(); s.refresh(d)
     v = DocumentVersion(document_id=d.id, version=1, filename=file.filename,
                         mime_type=file.content_type or "application/octet-stream",
@@ -1234,6 +1346,10 @@ def delete_document(doc_id: int, u: User = Depends(require_user), s: Session = D
             s.delete(v)
         for w in s.exec(select(DocWorkflowEvent).where(DocWorkflowEvent.document_id == doc_id)).all():
             s.delete(w)
+        for sg in s.exec(select(DocSignature).where(DocSignature.document_id == doc_id)).all():
+            s.delete(sg)
+        for a in s.exec(select(DocAck).where(DocAck.document_id == doc_id)).all():
+            s.delete(a)
         _audit(s, u.name, "Suppression document", d.name)
         s.delete(d); s.commit()
     return {"ok": True}

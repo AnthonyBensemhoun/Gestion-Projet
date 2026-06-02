@@ -543,6 +543,18 @@ input[type=checkbox]{accent-color:var(--acc);width:16px;height:16px;cursor:point
 .me-due.soon{color:var(--warn)}
 @media(max-width:560px){.me-ava{display:none}}
 
+/* ---- DOCUMENTS QUALITÉ : référence, SLA, signature, accusé ---- */
+.doc-ref{font-family:'Space Grotesk',monospace;font-size:11px;font-weight:700;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:1px 7px;color:var(--ink);letter-spacing:.3px}
+.doc-ref.lg{font-size:13px;padding:3px 9px;background:linear-gradient(120deg,rgba(79,70,229,.12),rgba(20,184,166,.10));border-color:rgba(79,70,229,.2);color:var(--acc)}
+.doc-sla-badge{display:inline-block;font-size:10px;font-weight:700;background:rgba(220,38,38,.12);color:var(--bad);border:1px solid rgba(220,38,38,.25);border-radius:6px;padding:2px 7px}
+.doc-sla-badge.big{font-size:11px;padding:4px 10px;white-space:nowrap}
+.doc-pcard.sla-over{border-color:rgba(220,38,38,.4);box-shadow:0 0 0 1px rgba(220,38,38,.15)}
+.doc-sign-block{margin-top:10px;padding:11px;border:1px dashed var(--acc);border-radius:var(--r-sm);background:rgba(79,70,229,.05)}
+.doc-sign-head{font-size:12px;font-weight:700;color:var(--acc);margin-bottom:8px;line-height:1.4}
+.doc-sign-item{padding:8px 0;border-bottom:1px solid var(--line)}
+.doc-sign-item:last-child{border-bottom:none}
+.doc-ack-panel{padding:13px;margin:14px 0;border-left:3px solid var(--ok);background:rgba(22,163,74,.05)}
+
 /* ---- KANBAN ---- */
 .kanban-board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start}
 @media(max-width:720px){.kanban-board{grid-template-columns:1fr}}

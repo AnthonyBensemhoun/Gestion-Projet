@@ -1327,6 +1327,7 @@ async function renderKPI(){
   allDocs.forEach(d=>{const ph=d.phase||'redaction';phaseCounts[ph]=(phaseCounts[ph]||0)+1;});
   const readyQMS=phaseCounts['pret_qms']||0;
   const awaitingReview=(phaseCounts['revue_qa']||0)+(phaseCounts['approbation']||0);
+  const slaBreaches=allDocs.filter(d=>d.sla_over).length;
 
   // Projets à risque (au moins une tâche en retard)
   const projRisk=state.projects.filter(p=>allTasks.some(t=>t.project_id==p.id&&isLate(t))).length;
@@ -1344,6 +1345,7 @@ async function renderKPI(){
     ${kpiCard('🟢','Membres dispo. auj.','','','ok',`${availMembers}<span style="font-size:18px;color:var(--mut)">/${state.users.length}</span>`)}
     ${kpiCard('🚀','Docs prêts QMS',readyQMS,'','teal')}
     ${kpiCard('🔬','Docs en revue QA',awaitingReview,'',awaitingReview>0?'warn':'ok')}
+    ${kpiCard('⏱','Docs hors délai SLA',slaBreaches,'',slaBreaches>0?'bad':'ok')}
     ${kpiCard('⚠️','Projets à risque',projRisk,'',projRisk>0?'bad':'ok')}
   </div>`;
 
@@ -1424,6 +1426,8 @@ const DOC_PHASES=[
   {key:'pret_qms',     label:'Prêt pour QMS', ic:'🚀', color:'#2e9e5b'},
 ];
 const DOC_PHASE_BY_KEY=Object.fromEntries(DOC_PHASES.map(p=>[p.key,p]));
+const DOC_TYPES={SOP:'SOP',PROTO:'Protocole',REPORT:'Rapport',FORM:'Formulaire',IT:'Instruction',DOC:'Document'};
+const DOC_SIGN_PHASES=['approbation','pret_qms'];
 function docPhaseIndex(k){return DOC_PHASES.findIndex(p=>p.key===k);}
 let currentDocId=null, currentDocObj=null, docProjectFilter='';
 
@@ -1475,13 +1479,17 @@ async function renderDocs(){
       const assignee=d.assigned_to_name
         ? `<div class="doc-assignee"><span class="ava" style="width:22px;height:22px;font-size:10px;background:${avaColor(d.assigned_to)}">${initials(d.assigned_to_name)}</span><span>${esc(d.assigned_to_name)}</span></div>`
         : '<div class="meta" style="font-size:11px">Non assigné</div>';
-      return `<div class="doc-pcard" data-open-doc="${d.id}">
+      const ref=d.reference?`<span class="doc-ref">${esc(d.reference)}</span>`:'';
+      const sla=d.sla_over?`<span class="doc-sla-badge" title="Délai indicatif de ${d.sla_days} j dépassé">⏱ ${d.days_in_phase} j · SLA dépassé</span>`:'';
+      return `<div class="doc-pcard${d.sla_over?' sla-over':''}" data-open-doc="${d.id}">
         <div class="row" style="justify-content:space-between;align-items:flex-start;gap:6px">
-          <strong style="font-size:13px;line-height:1.3">📄 ${esc(d.name)}</strong>
+          ${ref}
           <span class="pill" style="font-size:10px">v${d.last_version}</span>
         </div>
+        <strong style="font-size:13px;line-height:1.3;display:block;margin-top:4px">📄 ${esc(d.name)}</strong>
         ${proj?`<div class="meta" style="font-size:11px">📁 ${esc(proj.name)}</div>`:'<div class="meta" style="font-size:11px">📁 Service</div>'}
         <div style="margin-top:6px">${assignee}</div>
+        ${sla?`<div style="margin-top:5px">${sla}</div>`:''}
         ${lock?`<div style="margin-top:5px">${lock}</div>`:''}
       </div>`;
     }).join('');
@@ -1562,6 +1570,13 @@ async function openDocDetail(docId){
     </div>
     <div class="field" style="margin:8px 0 0"><label style="font-size:11px">Note (optionnel)</label>
       <input id="f_docTransNote" placeholder="Ex : prêt pour relecture QA" style="width:100%;background:var(--panel2);border:1.5px solid var(--line);padding:7px 10px;border-radius:var(--r-sm);outline:none;font-size:13px"></div>
+    <div id="docSignBlock" class="doc-sign-block hidden">
+      <div class="doc-sign-head">🔏 Signature électronique requise — cette action engage ta responsabilité (21 CFR Part 11).</div>
+      <div class="field" style="margin:0 0 8px"><label style="font-size:11px">Motif / signification</label>
+        <input id="f_docSignReason" placeholder="Ex : Document approuvé, conforme aux exigences qualité" style="width:100%;background:#fff;border:1.5px solid var(--line);padding:7px 10px;border-radius:var(--r-sm);outline:none;font-size:13px"></div>
+      <div class="field" style="margin:0"><label style="font-size:11px">Confirme ton mot de passe</label>
+        <input type="password" id="f_docSignPwd" placeholder="••••••••" autocomplete="current-password" style="width:100%;background:#fff;border:1.5px solid var(--line);padding:7px 10px;border-radius:var(--r-sm);outline:none;font-size:13px"></div>
+    </div>
     <label class="row" style="gap:6px;margin-top:8px;font-size:13px;cursor:pointer">
       <input type="checkbox" id="f_docNotify" checked> Prévenir la personne par email (ouvre Outlook)
     </label>
@@ -1596,13 +1611,48 @@ async function openDocDetail(docId){
       <a class="btn sm ghost" href="/api/documents/${d.id}/versions/${v.id}/download">⬇ Télécharger</a>
     </div>`).join('');
 
+  // ----- Signatures électroniques -----
+  const sigHtml=(d.signatures||[]).map(sg=>`
+    <div class="doc-sign-item">
+      <div style="font-size:13px"><strong>✒️ ${esc(sg.user_name)}</strong> — ${esc(sg.meaning)} <span class="meta">(v${sg.version})</span></div>
+      <div class="meta" style="font-size:12px">« ${esc(sg.reason)} » · ${fmtDateTime(sg.signed_at)}</div>
+    </div>`).join('')||'<div class="empty">Aucune signature pour le moment</div>';
+
+  // ----- Lu & compris (accusés de lecture) -----
+  let ackPanel='';
+  if(d.needs_ack){
+    const names=(d.acks||[]).map(a=>esc(a.user_name)).join(', ');
+    ackPanel=`<div class="panel doc-ack-panel">
+      <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <strong style="font-size:14px">📖 Lu &amp; compris</strong>
+        ${d.my_ack
+          ? `<span style="color:var(--ok);font-weight:600;font-size:13px">✓ Tu as accusé réception (v${d.last_version})</span>`
+          : `<button class="btn primary sm" id="btnDocAck">✓ J'ai lu et compris ce document</button>`}
+      </div>
+      <div class="meta" style="margin-top:6px;font-size:12px">${d.ack_count} accusé(s) de lecture sur v${d.last_version}${names?' : '+names:''}</div>
+    </div>`;
+  }
+
   const proj=d.project_id?projById(d.project_id):null;
+  const slaHtml=d.sla_over
+    ? `<span class="doc-sla-badge big">⏱ ${d.days_in_phase} j en phase · SLA dépassé (max ${d.sla_days} j)</span>`
+    : (d.sla_days?`<span class="meta" style="font-size:11px;white-space:nowrap">⏱ ${d.days_in_phase} j en phase / ${d.sla_days} j</span>`:'');
   c.innerHTML=`
-    <h2 style="margin:0">📄 ${esc(d.name)}</h2>
+    <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px">
+      <div style="min-width:0">
+        <div class="row" style="gap:7px;align-items:center;flex-wrap:wrap">
+          ${d.reference?`<span class="doc-ref lg">${esc(d.reference)}</span>`:''}
+          <span class="pill">${DOC_TYPES[d.doc_type]||d.doc_type}</span>
+        </div>
+        <h2 style="margin:7px 0 0">📄 ${esc(d.name)}</h2>
+      </div>
+      ${slaHtml}
+    </div>
     ${d.description?`<div class="meta" style="margin-top:6px">${esc(d.description)}</div>`:''}
     <div class="meta" style="margin-top:4px">${proj?'📁 '+esc(proj.name):'📁 Document de service'} · Créé par ${esc(d.created_by_name||'?')} · ${fmtDateTime(d.created_at)}</div>
 
     ${timeline}
+    ${ackPanel}
     ${transition}
 
     <div class="panel" style="padding:12px;margin-bottom:14px">
@@ -1613,6 +1663,9 @@ async function openDocDetail(docId){
       </div>
       ${isLockedByMe?`<div class="meta" style="margin-top:8px;font-size:12px">💡 Édite le fichier téléchargé dans Word, puis clique « Uploader nouvelle version ».</div>`:''}
     </div>
+
+    <h3 style="font-size:15px;margin:16px 0 4px">🔏 Signatures électroniques (${(d.signatures||[]).length})</h3>
+    <div style="max-height:160px;overflow:auto">${sigHtml}</div>
 
     <h3 style="font-size:15px;margin:16px 0 4px">🗂 Historique du workflow</h3>
     <div style="max-height:180px;overflow:auto">${wfHtml||'<div class="empty">Aucune étape</div>'}</div>
@@ -1631,6 +1684,21 @@ async function openDocDetail(docId){
   if(upBtn) upBtn.addEventListener('click',()=>$('docVersionFile').click());
   const trBtn=$('btnDocTransition');
   if(trBtn) trBtn.addEventListener('click',docTransition);
+  const ackBtn=$('btnDocAck');
+  if(ackBtn) ackBtn.addEventListener('click',ackDoc);
+  // Affiche le bloc signature si la phase choisie l'exige
+  const phaseSel=$('f_docPhase');
+  function toggleSign(){const need=DOC_SIGN_PHASES.includes(phaseSel.value);$('docSignBlock').classList.toggle('hidden',!need);}
+  if(phaseSel){phaseSel.addEventListener('change',toggleSign);toggleSign();}
+}
+
+async function ackDoc(){
+  if(!currentDocId)return;
+  try{
+    await api('/api/documents/'+currentDocId+'/ack',{method:'POST',body:{}});
+    toast('Accusé de lecture enregistré ✓');
+    openDocDetail(currentDocId);
+  }catch(e){toast(e.message,'err');}
 }
 
 async function docTransition(){
@@ -1640,10 +1708,18 @@ async function docTransition(){
   const note=$('f_docTransNote').value.trim();
   const notify=$('f_docNotify').checked;
   const ph=DOC_PHASE_BY_KEY[phase];
+  const body={phase, assigned_to: assigneeVal?parseInt(assigneeVal,10):null, note, notify};
+  // Signature électronique requise pour Approbation / Prêt QMS
+  if(DOC_SIGN_PHASES.includes(phase)){
+    const reason=$('f_docSignReason').value.trim();
+    const pwd=$('f_docSignPwd').value;
+    if(!reason){toast('Indique le motif de la signature.','err');$('f_docSignReason').focus();return;}
+    if(!pwd){toast('Confirme ton mot de passe pour signer.','err');$('f_docSignPwd').focus();return;}
+    body.reason=reason;body.password=pwd;
+  }
   try{
-    const r=await api('/api/documents/'+currentDocId+'/transition',{method:'POST',
-      body:{phase, assigned_to: assigneeVal?parseInt(assigneeVal,10):null, note, notify}});
-    toast('Document déplacé en « '+(ph?ph.label:phase)+' »');
+    const r=await api('/api/documents/'+currentDocId+'/transition',{method:'POST',body});
+    toast((DOC_SIGN_PHASES.includes(phase)?'✒️ Signé et déplacé en « ':'Document déplacé en « ')+(ph?ph.label:phase)+' »');
     // Notification email via Outlook (mailto) — ouvre depuis ton compte
     if(notify && assigneeVal && r.assignee_email){
       const docName=currentDocObj?currentDocObj.name:'document';
@@ -1684,6 +1760,7 @@ async function saveDoc(){
   fd.append('name',name);
   fd.append('description',$('f_docDesc').value.trim());
   fd.append('note',$('f_docNote').value.trim());
+  fd.append('doc_type',$('f_docType').value);
   const pid=$('f_docProject').value;
   if(pid) fd.append('project_id',pid);
   fd.append('file',file);

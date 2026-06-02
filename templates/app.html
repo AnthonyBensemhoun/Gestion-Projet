@@ -335,7 +335,21 @@ window.CURRENT_USER = {
 <!-- Modale : créer un document -->
 <div class="modal-bg" id="docCreateModal"><div class="modal">
   <h2>Ajouter un document qualité</h2>
-  <div class="field"><label>Nom du document</label><input id="f_docName" placeholder="Ex : SOP-Nettoyage-Assemblage"></div>
+  <div class="row" style="gap:12px">
+    <div class="field" style="flex:1"><label>Type de document</label>
+      <select id="f_docType">
+        <option value="SOP">SOP</option>
+        <option value="PROTO">Protocole</option>
+        <option value="REPORT">Rapport</option>
+        <option value="FORM">Formulaire</option>
+        <option value="IT">Instruction</option>
+        <option value="DOC" selected>Document</option>
+      </select>
+    </div>
+    <div class="field" style="flex:1"><label>Référence</label>
+      <input id="f_docRefPreview" disabled placeholder="auto (ex : SOP-2026-014)" style="font-family:monospace"></div>
+  </div>
+  <div class="field"><label>Nom du document</label><input id="f_docName" placeholder="Ex : Nettoyage poste d'assemblage"></div>
   <div class="field"><label>Description</label><textarea id="f_docDesc" rows="2" placeholder="Objet du document, périmètre…"></textarea></div>
   <div class="field"><label>Projet associé (optionnel)</label><select id="f_docProject"><option value="">— Document de service (général) —</option></select></div>
   <div class="field"><label>Fichier</label><input type="file" id="f_docFile" accept=".docx,.doc,.pdf,.xlsx,.xls,.pptx,.ppt,.txt,.md,.csv"></div>

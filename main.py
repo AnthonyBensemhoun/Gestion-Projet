@@ -1112,25 +1112,9 @@ def transition_document(doc_id: int, data: dict, u: User = Depends(require_user)
                 + (f"\nNote : {note}" if note else ""),
                 doc_id=doc_id, actor_id=u.id)
     s.commit()
-    # Envoi email serveur (Resend/SMTP) si demandé
+    # L'email part via Outlook (mailto) côté client ; ici on renvoie juste les infos destinataire.
     target = s.get(User, assigned_to) if assigned_to else None
-    emailed = False
-    if notify and target and target.email and target.id != u.id:
-        try:
-            app_url = os.environ.get("APP_URL", "")
-            subject = f"[{_setting(s,'app_name','Helix')}] {d.name} — {phase_lbl} : action requise"
-            body = (f"Bonjour {target.name.split(' ')[0]},\n\n"
-                    f"Le document « {d.name} » vient de passer en phase « {phase_lbl} » "
-                    f"et t'a été assigné pour action / revue.\n"
-                    + (f"\nNote : {note}\n" if note else "")
-                    + (f"\nAccéder à l'application : {app_url}\n" if app_url else "")
-                    + f"\nCordialement,\n{u.name}")
-            _send_email(target.email, subject, body)
-            emailed = True
-        except Exception as e:
-            print(f"[Helix] Email transition non envoyé : {e}")
-    return {"ok": True, "phase": phase, "emailed": emailed,
-            "email_configured": email_configured(),
+    return {"ok": True, "phase": phase,
             "assignee_email": target.email if target else None,
             "assignee_name": target.name if target else None}
 

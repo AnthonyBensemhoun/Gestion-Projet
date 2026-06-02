@@ -143,9 +143,11 @@ kbd{font-family:'Space Grotesk',monospace;font-size:10px;background:var(--panel2
 .topbar-actions{margin-left:auto;display:flex;align-items:center;gap:8px;position:relative}
 .icon-btn{
   width:38px;height:38px;border-radius:10px;border:1px solid var(--line);background:var(--panel);
-  cursor:pointer;display:grid;place-items:center;font-size:16px;position:relative;transition:all var(--t-fast);color:var(--ink);
+  cursor:pointer;display:grid;place-items:center;font-size:16px;position:relative;color:var(--ink);
+  transition:transform .2s cubic-bezier(.34,1.56,.64,1),border-color var(--t-fast),color var(--t-fast),box-shadow var(--t-fast);
 }
-.icon-btn:hover{border-color:var(--acc);color:var(--acc);transform:translateY(-1px)}
+.icon-btn:hover{border-color:var(--acc);color:var(--acc);transform:translateY(-2px) scale(1.08);box-shadow:var(--shadow-sm)}
+.icon-btn:active{transform:scale(.94)}
 .icon-btn .badge{position:absolute;top:-5px;right:-5px;min-width:17px;height:17px;padding:0 4px;display:flex;align-items:center;justify-content:center;line-height:1}
 .only-mobile{display:none}
 
@@ -170,9 +172,15 @@ kbd{font-family:'Space Grotesk',monospace;font-size:10px;background:var(--panel2
   color:var(--mut);font-weight:600;font-size:13.5px;text-decoration:none;
   border:1px solid transparent;transition:all var(--t-fast);position:relative;
 }
-.side-nav .tab .ic{width:20px;text-align:center;font-size:15px;flex-shrink:0}
-.side-nav .tab .lb{flex:1}
-.side-nav .tab:hover{background:var(--panel2);color:var(--ink)}
+.side-nav .tab .ic{
+  width:20px;text-align:center;font-size:15px;flex-shrink:0;
+  transform-origin:left center;will-change:transform;
+  transition:transform .22s cubic-bezier(.34,1.56,.64,1);
+}
+.side-nav .tab .lb{flex:1;transition:transform var(--t-fast)}
+.side-nav .tab{transition:background var(--t-fast),color var(--t-fast),transform .2s cubic-bezier(.34,1.56,.64,1)}
+.side-nav .tab:hover{background:var(--panel2);color:var(--ink);transform:translateX(3px)}
+.side-nav .tab:active{transform:translateX(1px) scale(.98)}
 .side-nav .tab.active{
   background:linear-gradient(100deg,rgba(79,70,229,.12),rgba(20,184,166,.09));
   color:var(--acc);border-color:rgba(79,70,229,.16);

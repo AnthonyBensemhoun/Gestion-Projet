@@ -1644,18 +1644,13 @@ async function docTransition(){
     const r=await api('/api/documents/'+currentDocId+'/transition',{method:'POST',
       body:{phase, assigned_to: assigneeVal?parseInt(assigneeVal,10):null, note, notify}});
     toast('Document déplacé en « '+(ph?ph.label:phase)+' »');
-    // Email : serveur (Resend/SMTP) si configuré, sinon repli Outlook (mailto)
+    // Notification email via Outlook (mailto) — ouvre depuis ton compte
     if(notify && assigneeVal && r.assignee_email){
-      if(r.emailed){
-        toast('📧 Email envoyé automatiquement à '+(r.assignee_name||r.assignee_email));
-      }else{
-        // pas d'envoi serveur → repli mailto (ouvre Outlook)
-        const docName=currentDocObj?currentDocObj.name:'document';
-        const appUrl=window.location.origin;
-        const subject=`[Document qualité] ${docName} — ${ph?ph.label:phase} : action requise`;
-        const body=`Bonjour ${(r.assignee_name||'').split(' ')[0]},\n\nLe document « ${docName} » vient de passer en phase « ${ph?ph.label:phase} » et t'a été assigné pour action / revue.\n${note?'\nNote : '+note+'\n':''}\nAccède à l'application pour le consulter :\n${appUrl}\n\nMerci,\n${ME.name}`;
-        window.location.href='mailto:'+encodeURIComponent(r.assignee_email)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
-      }
+      const docName=currentDocObj?currentDocObj.name:'document';
+      const appUrl=window.location.origin;
+      const subject=`[Document qualité] ${docName} — ${ph?ph.label:phase} : action requise`;
+      const body=`Bonjour ${(r.assignee_name||'').split(' ')[0]},\n\nLe document « ${docName} » vient de passer en phase « ${ph?ph.label:phase} » et t'a été assigné pour action / revue.\n${note?'\nNote : '+note+'\n':''}\nAccède à l'application pour le consulter :\n${appUrl}\n\nMerci,\n${ME.name}`;
+      window.location.href='mailto:'+encodeURIComponent(r.assignee_email)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
     }else if(notify && assigneeVal && !r.assignee_email){
       toast("Pas d'email pour cette personne — notification in-app seulement.",'warn');
     }
@@ -1960,6 +1955,32 @@ if($('sidebarScrim')) $('sidebarScrim').addEventListener('click',()=>toggleSideb
 // Sur mobile, refermer la sidebar après navigation
 document.querySelectorAll('.side-nav .tab').forEach(t=>t.addEventListener('click',()=>{if(window.innerWidth<=900)toggleSidebar(false);}));
 
+// ====== Effet "dock" macOS : magnification des icônes au survol ======
+(function(){
+  const nav=document.querySelector('.side-nav');
+  if(!nav)return;
+  const RADIUS=96, MAXSCALE=0.55, MAXSHIFT=10;
+  let raf=null;
+  function magnify(my){
+    nav.querySelectorAll('.tab').forEach(it=>{
+      const ic=it.querySelector('.ic');if(!ic)return;
+      const r=it.getBoundingClientRect();
+      const center=r.top+r.height/2;
+      const t=Math.max(0,1-Math.abs(my-center)/RADIUS);
+      const e=t*t;  // falloff doux
+      ic.style.transform=`scale(${1+MAXSCALE*e}) translateX(${MAXSHIFT*e}px)`;
+    });
+  }
+  nav.addEventListener('mousemove',e=>{
+    const y=e.clientY;
+    if(raf)cancelAnimationFrame(raf);
+    raf=requestAnimationFrame(()=>magnify(y));
+  });
+  nav.addEventListener('mouseleave',()=>{
+    nav.querySelectorAll('.ic').forEach(ic=>ic.style.transform='');
+  });
+})();
+
 // Filtres
 if($('filterAssignee')) $('filterAssignee').addEventListener('change',applyFilters);
 if($('filterPriority')) $('filterPriority').addEventListener('change',applyFilters);
@@ -2074,4 +2095,4 @@ $('btnChangePw').addEventListener('click',changeMyPassword);
 [$('f_newPw'),$('f_newPw2')].forEach(inp=>inp.addEventListener('keydown',e=>{if(e.key==='Enter')changeMyPassword();}));
 if(ME.must_change_password) $('changePwModal').classList.add('show');
 
-loadAll();
+loadAll().then(()=>{ if($('sec-me') && !$('sec-me').classList.contains('hidden')) renderMe(); });

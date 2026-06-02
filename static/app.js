@@ -1593,7 +1593,7 @@ const DOC_PHASE_BY_KEY=Object.fromEntries(DOC_PHASES.map(p=>[p.key,p]));
 const DOC_TYPES={SOP:'SOP',PROTO:'Protocole',REPORT:'Rapport',FORM:'Formulaire',IT:'Instruction',DOC:'Document'};
 const DOC_SIGN_PHASES=['approbation','pret_qms'];
 function docPhaseIndex(k){return DOC_PHASES.findIndex(p=>p.key===k);}
-let currentDocId=null, currentDocObj=null, docProjectFilter='';
+let currentDocId=null, currentDocObj=null, docProjectFilter='', docViewMode='folders';
 let _docComments=[], _placingComment=false;
 
 function fmtBytes(n){
@@ -1622,59 +1622,96 @@ async function renderDocs(){
   catch(e){el.innerHTML='<div class="empty">Erreur : '+esc(e.message)+'</div>';return;}
   state.documents=docs;
 
-  // Filtre projet
+  // Barre d'outils : filtre projet + bascule de vue (Répertoires / Workflow)
   const projOpts=['<option value="">Tous les documents</option>',
     '<option value="service">📁 Documents de service</option>']
     .concat(state.projects.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`)).join('');
   const filterBar=`<div class="doc-toolbar">
     <label style="font-size:12px;font-weight:700;color:var(--mut)">PROJET :</label>
     <select id="docProjFilter" class="btn sm">${projOpts}</select>
+    <div class="doc-viewtoggle">
+      <button class="btn sm${docViewMode==='folders'?' primary':' ghost'}" id="docViewFolders">📁 Répertoires</button>
+      <button class="btn sm${docViewMode==='workflow'?' primary':' ghost'}" id="docViewWorkflow">⠿ Workflow</button>
+    </div>
   </div>`;
 
   let filtered=docs;
   if(docProjectFilter==='service') filtered=docs.filter(d=>!d.project_id);
   else if(docProjectFilter) filtered=docs.filter(d=>String(d.project_id)===String(docProjectFilter));
 
+  const wireToolbar=()=>{
+    const fs=$('docProjFilter');if(fs){fs.value=docProjectFilter;fs.addEventListener('change',function(){docProjectFilter=this.value;renderDocs();});}
+    if($('docViewFolders')) $('docViewFolders').addEventListener('click',()=>{docViewMode='folders';renderDocs();});
+    if($('docViewWorkflow')) $('docViewWorkflow').addEventListener('click',()=>{docViewMode='workflow';renderDocs();});
+  };
+
   if(!filtered.length){
     el.innerHTML=filterBar+'<div class="empty">Aucun document. Clique sur « + Ajouter un document ».</div>';
-    const fs=$('docProjFilter');if(fs){fs.value=docProjectFilter;fs.addEventListener('change',function(){docProjectFilter=this.value;renderDocs();});}
-    return;
+    wireToolbar();return;
   }
 
-  // Pipeline : une colonne par phase
-  const cols=DOC_PHASES.map(ph=>{
-    const inPhase=filtered.filter(d=>(d.phase||'redaction')===ph.key);
-    const cards=inPhase.map(d=>{
-      const proj=d.project_id?projById(d.project_id):null;
-      const lock=d.locked_by?`<span class="pill" style="background:rgba(214,56,63,.12);color:var(--bad);font-size:10px">🔒 ${esc(d.locked_by_name||'?')}</span>`:'';
-      const assignee=d.assigned_to_name
-        ? `<div class="doc-assignee"><span class="ava" style="width:22px;height:22px;font-size:10px;background:${avaColor(d.assigned_to)}">${initials(d.assigned_to_name)}</span><span>${esc(d.assigned_to_name)}</span></div>`
-        : '<div class="meta" style="font-size:11px">Non assigné</div>';
-      const ref=d.reference?`<span class="doc-ref">${esc(d.reference)}</span>`:'';
-      const sla=d.sla_over?`<span class="doc-sla-badge" title="Délai indicatif de ${d.sla_days} j dépassé">⏱ ${d.days_in_phase} j · SLA dépassé</span>`:'';
-      return `<div class="doc-pcard${d.sla_over?' sla-over':''}${d.obsolete?' obsolete':''}" data-open-doc="${d.id}">
-        <div class="row" style="justify-content:space-between;align-items:flex-start;gap:6px">
-          ${ref||(d.obsolete?'<span class="doc-obsolete-badge">⚠ OBSOLÈTE</span>':'')}
-          <span class="pill" style="font-size:10px">v${d.last_version}</span>
-        </div>
-        <strong style="font-size:13px;line-height:1.3;display:block;margin-top:4px">📄 ${esc(d.name)}</strong>
-        ${proj?`<div class="meta" style="font-size:11px">📁 ${esc(proj.name)}</div>`:'<div class="meta" style="font-size:11px">📁 Service</div>'}
-        <div style="margin-top:6px">${assignee}</div>
-        ${sla?`<div style="margin-top:5px">${sla}</div>`:''}
-        ${lock?`<div style="margin-top:5px">${lock}</div>`:''}
+  if(docViewMode==='folders'){
+    // Regroupement par répertoire
+    const groups={};
+    filtered.forEach(d=>{const f=(d.folder||'').trim()||'__none__';(groups[f]=groups[f]||[]).push(d);});
+    const keys=Object.keys(groups).sort((a,b)=>{if(a==='__none__')return 1;if(b==='__none__')return -1;return a.localeCompare(b);});
+    const sections=keys.map(k=>{
+      const list=groups[k].slice().sort((a,b)=>a.name.localeCompare(b.name));
+      const label=k==='__none__'?'📂 Sans répertoire':'📁 '+esc(k);
+      const rows=list.map(d=>{
+        const ph=DOC_PHASE_BY_KEY[d.phase||'redaction']||{ic:'•',label:d.phase,color:'var(--mut)'};
+        const proj=d.project_id?projById(d.project_id):null;
+        return `<div class="doc-frow${d.obsolete?' obsolete':''}" data-open-doc="${d.id}">
+          <span class="doc-frow-ic">📄</span>
+          <div style="flex:1;min-width:0">
+            <div class="doc-frow-name">${esc(d.name)} ${d.obsolete?'<span class="doc-obsolete-badge">⚠ OBSOLÈTE</span>':''}</div>
+            <div class="meta" style="font-size:11px">${DOC_TYPES[d.doc_type]||d.doc_type} · v${d.last_version}${proj?' · '+esc(proj.name):' · Service'}${d.assigned_to_name?' · chez '+esc(d.assigned_to_name):''}</div>
+          </div>
+          <span class="pill" style="background:${ph.color};color:#fff;font-size:10px;white-space:nowrap">${ph.ic} ${ph.label}</span>
+          ${d.sla_over?'<span class="doc-sla-badge">⏱</span>':''}
+        </div>`;
+      }).join('');
+      return `<div class="doc-folder">
+        <div class="doc-folder-head"><span>${label}</span><span class="doc-col-count">${list.length}</span></div>
+        <div class="doc-folder-body">${rows}</div>
       </div>`;
     }).join('');
+    el.innerHTML=filterBar+`<div class="doc-folders">${sections}</div>`;
+    wireToolbar();return;
+  }
+
+  // Vue Workflow : une colonne par phase
+  const docCard=(d)=>{
+    const proj=d.project_id?projById(d.project_id):null;
+    const lock=d.locked_by?`<span class="pill" style="background:rgba(214,56,63,.12);color:var(--bad);font-size:10px">🔒 ${esc(d.locked_by_name||'?')}</span>`:'';
+    const assignee=d.assigned_to_name
+      ? `<div class="doc-assignee"><span class="ava" style="width:22px;height:22px;font-size:10px;background:${avaColor(d.assigned_to)}">${initials(d.assigned_to_name)}</span><span>${esc(d.assigned_to_name)}</span></div>`
+      : '<div class="meta" style="font-size:11px">Non assigné</div>';
+    const sla=d.sla_over?`<span class="doc-sla-badge" title="Délai indicatif de ${d.sla_days} j dépassé">⏱ ${d.days_in_phase} j · SLA dépassé</span>`:'';
+    const fold=d.folder?`<span class="doc-folder-tag">📁 ${esc(d.folder)}</span>`:'';
+    return `<div class="doc-pcard${d.sla_over?' sla-over':''}${d.obsolete?' obsolete':''}" data-open-doc="${d.id}">
+      <div class="row" style="justify-content:space-between;align-items:flex-start;gap:6px">
+        ${fold||(d.obsolete?'<span class="doc-obsolete-badge">⚠ OBSOLÈTE</span>':'<span></span>')}
+        <span class="pill" style="font-size:10px">v${d.last_version}</span>
+      </div>
+      <strong style="font-size:13px;line-height:1.3;display:block;margin-top:4px">📄 ${esc(d.name)}</strong>
+      ${proj?`<div class="meta" style="font-size:11px">${esc(proj.name)}</div>`:'<div class="meta" style="font-size:11px">Service</div>'}
+      <div style="margin-top:6px">${assignee}</div>
+      ${sla?`<div style="margin-top:5px">${sla}</div>`:''}
+      ${lock?`<div style="margin-top:5px">${lock}</div>`:''}
+    </div>`;
+  };
+  const cols=DOC_PHASES.map(ph=>{
+    const inPhase=filtered.filter(d=>(d.phase||'redaction')===ph.key);
     return `<div class="doc-col">
       <div class="doc-col-head" style="border-top:3px solid ${ph.color}">
         <span>${ph.ic} ${ph.label}</span><span class="doc-col-count">${inPhase.length}</span>
       </div>
-      <div class="doc-col-body">${cards||'<div class="doc-col-empty">—</div>'}</div>
+      <div class="doc-col-body">${inPhase.map(docCard).join('')||'<div class="doc-col-empty">—</div>'}</div>
     </div>`;
   }).join('');
-
   el.innerHTML=filterBar+`<div class="doc-pipeline">${cols}</div>`;
-  const fs=$('docProjFilter');
-  if(fs){fs.value=docProjectFilter;fs.addEventListener('change',function(){docProjectFilter=this.value;renderDocs();});}
+  wireToolbar();
 }
 
 async function openDocDetail(docId){
@@ -1837,6 +1874,8 @@ async function openDocDetail(docId){
         <div class="row" style="gap:7px;align-items:center;flex-wrap:wrap">
           ${d.reference?`<span class="doc-ref lg">${esc(d.reference)}</span>`:''}
           <span class="pill">${DOC_TYPES[d.doc_type]||d.doc_type}</span>
+          ${d.folder?`<span class="doc-folder-tag">📁 ${esc(d.folder)}</span>`:''}
+          <button class="btn sm ghost" id="btnDocFolder" style="padding:2px 8px;font-size:11px">📁 ${d.folder?'Changer':'Ranger'}</button>
           ${d.obsolete?'<span class="doc-obsolete-badge">⚠ OBSOLÈTE</span>':''}
         </div>
         <h2 style="margin:7px 0 0">📄 ${esc(d.name)}</h2>
@@ -1882,6 +1921,14 @@ async function openDocDetail(docId){
   if(trBtn) trBtn.addEventListener('click',docTransition);
   const ackBtn=$('btnDocAck');
   if(ackBtn) ackBtn.addEventListener('click',ackDoc);
+  // Répertoire / catégorie
+  const folBtn=$('btnDocFolder');
+  if(folBtn) folBtn.addEventListener('click',async()=>{
+    const v=prompt('Répertoire / catégorie du document :',d.folder||'');
+    if(v===null)return;
+    try{await api('/api/documents/'+d.id,{method:'PUT',body:{folder:v.trim()}});toast('Répertoire mis à jour');openDocDetail(d.id);renderDocs();}
+    catch(e){toast(e.message,'err');}
+  });
   // Gestion de la liste de diffusion
   const mgBtn=$('btnManageDist');
   if(mgBtn) mgBtn.addEventListener('click',()=>{
@@ -1948,6 +1995,7 @@ async function openDocViewer(docId){
     ${d.reference?`<span class="doc-ref">${esc(d.reference)}</span>`:''}
     <strong style="font-size:15px">📄 ${esc(d.name)}</strong>
     <span class="pill" style="background:${ph.color};color:#fff;font-size:10px">${ph.ic} ${ph.label}</span>
+    ${d.folder?`<span class="doc-folder-tag">📁 ${esc(d.folder)}</span>`:''}
     <span class="meta" style="font-size:11px">v${d.last_version}</span>
     ${d.obsolete?'<span class="doc-obsolete-badge">⚠ OBSOLÈTE</span>':''}
     ${d.sla_over?`<span class="doc-sla-badge">⏱ SLA dépassé</span>`:''}
@@ -2216,6 +2264,7 @@ async function saveDoc(){
   fd.append('description',$('f_docDesc').value.trim());
   fd.append('note',$('f_docNote').value.trim());
   fd.append('doc_type',$('f_docType').value);
+  fd.append('folder',$('f_docFolder')?$('f_docFolder').value.trim():'');
   const pid=$('f_docProject').value;
   if(pid) fd.append('project_id',pid);
   fd.append('file',file);
@@ -2245,7 +2294,7 @@ async function deleteDoc(id){
 function openDocCreate(){
   $('f_docProject').innerHTML='<option value="">— Document de service (général) —</option>'+state.projects.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
   $('docCreateModal').classList.add('show');
-  $('f_docFile').value='';$('f_docName').value='';
+  $('f_docFile').value='';$('f_docName').value='';if($('f_docFolder'))$('f_docFolder').value='';
 }
 // Auto-remplit le nom du document depuis le fichier choisi (modifiable ensuite)
 if($('f_docFile')) $('f_docFile').addEventListener('change',function(){

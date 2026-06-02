@@ -354,7 +354,17 @@ window.CURRENT_USER = {
     </div>
   </div>
   <div class="field"><label>Description</label><textarea id="f_docDesc" rows="2" placeholder="Objet du document, périmètre…"></textarea></div>
-  <div class="field"><label>Projet associé (optionnel)</label><select id="f_docProject"><option value="">— Document de service (général) —</option></select></div>
+  <div class="row" style="gap:12px">
+    <div class="field" style="flex:1"><label>Projet associé (optionnel)</label><select id="f_docProject"><option value="">— Document de service (général) —</option></select></div>
+    <div class="field" style="flex:1"><label>Répertoire / catégorie</label>
+      <input id="f_docFolder" list="docFolders" placeholder="Ex : Validation">
+      <datalist id="docFolders">
+        <option value="Validation"><option value="Qualification"><option value="Conception"><option value="Production">
+        <option value="Réglementaire"><option value="Analyse de risques"><option value="Rapports"><option value="Procédures (SOP)">
+        <option value="Spécifications"><option value="Fournisseurs"><option value="Autre">
+      </datalist>
+    </div>
+  </div>
   <div class="field"><label>Note de version (optionnel)</label><input id="f_docNote" placeholder="Ex : Création initiale"></div>
   <div class="row" style="justify-content:flex-end;margin-top:8px">
     <button class="btn ghost" data-close="docCreateModal">Annuler</button>

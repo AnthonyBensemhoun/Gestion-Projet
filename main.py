@@ -127,6 +127,7 @@ class Document(SQLModel, table=True):
     name: str
     description: str = ""
     doc_type: str = "DOC"      # SOP / PROTO / REPORT / FORM / IT / DOC
+    folder: str = ""           # répertoire/catégorie (ex : Validation, Qualification…)
     reference: str = ""        # référence (non utilisée — réservée)
     obsolete: bool = Field(default=False)  # marqué obsolète (remplacé par un autre doc)
     status: str = "draft"      # draft / review / approved (dérivé de la phase)
@@ -326,6 +327,8 @@ def on_startup():
              "ALTER TABLE project ADD COLUMN created_by INTEGER"),
             ('ALTER TABLE project ADD COLUMN IF NOT EXISTS lead_id INTEGER',
              "ALTER TABLE project ADD COLUMN lead_id INTEGER"),
+            ("ALTER TABLE document ADD COLUMN IF NOT EXISTS folder VARCHAR DEFAULT ''",
+             "ALTER TABLE document ADD COLUMN folder VARCHAR DEFAULT ''"),
         ]
         for pg_stmt, sq_stmt in migrations:
             try:
@@ -1187,6 +1190,7 @@ def _doc_dict(s: Session, d: Document, versions=None, me_id=None):
     return {
         "id": d.id, "name": d.name, "description": d.description,
         "doc_type": d.doc_type or "DOC", "reference": d.reference or "",
+        "folder": d.folder or "",
         "obsolete": bool(d.obsolete),
         "status": d.status, "project_id": d.project_id,
         "phase": phase,
@@ -1398,7 +1402,7 @@ def remove_doc_link(doc_id: int, data: dict, u: User = Depends(require_user), s:
 async def create_document(
     name: str = Form(...), description: str = Form(""),
     project_id: Optional[int] = Form(None), note: str = Form(""),
-    doc_type: str = Form("DOC"),
+    doc_type: str = Form("DOC"), folder: str = Form(""),
     file: UploadFile = File(...),
     u: User = Depends(require_user), s: Session = Depends(get_session)):
     name = name.strip()
@@ -1412,7 +1416,7 @@ async def create_document(
     dtype = doc_type if doc_type in DOC_TYPES else "DOC"
     d = Document(name=name, description=description.strip(),
                  project_id=project_id, created_by=u.id, status="draft",
-                 phase="redaction", assigned_to=u.id,
+                 phase="redaction", assigned_to=u.id, folder=(folder or "").strip(),
                  doc_type=dtype, reference="", phase_since=datetime.utcnow())
     s.add(d); s.commit(); s.refresh(d)
     v = DocumentVersion(document_id=d.id, version=1, filename=file.filename,
@@ -1563,6 +1567,7 @@ def update_document(doc_id: int, data: dict, u: User = Depends(require_user), s:
     updates = {}
     if "name" in data and data["name"].strip(): updates["name"] = data["name"].strip()
     if "description" in data: updates["description"] = data["description"].strip()
+    if "folder" in data: updates["folder"] = (data["folder"] or "").strip()
     if "status" in data and data["status"] in DOC_STATUS: updates["status"] = data["status"]
     if updates:
         s.execute(sa_update(Document).where(Document.id == doc_id).values(**updates))

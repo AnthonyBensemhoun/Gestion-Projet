@@ -238,8 +238,8 @@ function renderSynth(){
   const pp=projectProgress(), health=projectHealth(), ts=projTasks();
   let html='';
   html+='<div class="grid" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:18px">';
-  html+=`<div class="panel"><div class="l" style="color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:1px">Santé du projet</div><div style="font-family:Fraunces;font-size:24px;font-weight:900;margin-top:6px;color:${health.color}">${health.ic} ${health.label}</div></div>`;
-  html+=`<div class="panel"><div class="l" style="color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:1px">Avancement pondéré</div><div style="font-family:Fraunces;font-size:24px;font-weight:900;margin-top:6px">${pp.pct}%</div><div class="progress big"><i style="width:${pp.pct}%"></i></div></div>`;
+  html+=`<div class="panel"><div class="l" style="color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:1px">Santé du projet</div><div style="font-family:'Space Grotesk';font-size:24px;font-weight:700;margin-top:6px;color:${health.color}">${health.ic} ${health.label}</div></div>`;
+  html+=`<div class="panel"><div class="l" style="color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:1px">Avancement pondéré</div><div style="font-family:'Space Grotesk';font-size:24px;font-weight:700;margin-top:6px">${pp.pct}%</div><div class="progress big"><i style="width:${pp.pct}%"></i></div></div>`;
   html+=`<div class="panel"><div class="l" style="color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:1px">État des tâches</div><div style="margin-top:8px;font-size:13px;line-height:1.7">✅ Terminées : <strong>${pp.done}</strong><br>🔵 En cours : <strong>${pp.prog}</strong><br>⚪ À faire : <strong>${pp.todo}</strong><br>🔴 En retard : <strong>${pp.late}</strong></div></div>`;
   html+='</div>';
   if(proj.description)html+=`<div class="panel" style="margin-bottom:18px"><strong>Description</strong><div class="meta" style="margin-top:6px">${esc(proj.description)}</div></div>`;
@@ -1018,7 +1018,7 @@ function renderCapacity(){
           <div style="font-size:12px;color:var(--mut)">${L.tasks.length} tâche(s) · ${L.lateCount?'<span style="color:var(--bad)">'+L.lateCount+' en retard</span>':'<span style="color:var(--ok)">À jour</span>'}</div>
         </div>
         <div style="text-align:right">
-          <div style="font-family:Fraunces,serif;font-size:22px;font-weight:900;color:${lbl.col};line-height:1">${L.pct}%</div>
+          <div style="font-family:'Space Grotesk',sans-serif;font-size:22px;font-weight:700;color:${lbl.col};line-height:1">${L.pct}%</div>
           <div style="font-size:11px;font-weight:700;color:${lbl.col}">${lbl.txt}</div>
         </div>
       </div>
@@ -1661,6 +1661,19 @@ if($('btnAddTaskList')) $('btnAddTaskList').addEventListener('click',()=>openTas
 
 // Cloche notifications
 if($('btnNotif')) $('btnNotif').addEventListener('click',toggleNotifDropdown);
+
+// Recherche globale (topbar) + raccourci sidebar mobile
+if($('btnGlobalSearch')) $('btnGlobalSearch').addEventListener('click',openSearch);
+function toggleSidebar(force){
+  const sb=$('sidebar'); if(!sb) return;
+  const open = force!==undefined ? force : !sb.classList.contains('open');
+  sb.classList.toggle('open',open);
+  const sc=$('sidebarScrim'); if(sc) sc.classList.toggle('show',open);
+}
+if($('sidebarToggle')) $('sidebarToggle').addEventListener('click',()=>toggleSidebar());
+if($('sidebarScrim')) $('sidebarScrim').addEventListener('click',()=>toggleSidebar(false));
+// Sur mobile, refermer la sidebar après navigation
+document.querySelectorAll('.side-nav .tab').forEach(t=>t.addEventListener('click',()=>{if(window.innerWidth<=900)toggleSidebar(false);}));
 
 // Filtres
 if($('filterAssignee')) $('filterAssignee').addEventListener('change',applyFilters);

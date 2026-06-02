@@ -7,61 +7,75 @@
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header>
-  <div class="brand">
-    <div class="logo {% if is_admin %}editable{% endif %}" id="appLogo" title="{% if is_admin %}Cliquer pour changer{% endif %}">
+<div class="app-shell">
+<aside class="sidebar" id="sidebar">
+  <div class="side-brand">
+    <div class="logo {% if is_admin %}editable{% endif %}" id="appLogo" title="{% if is_admin %}Cliquer pour changer le logo{% endif %}">
       {% if app_logo %}<img src="{{ app_logo }}" alt="logo">{% else %}{{ app_name[0]|upper }}{% endif %}
     </div>
     {% if is_admin %}<input type="file" id="logoInput" accept="image/*" class="hidden">{% endif %}
-    <div>
+    <div class="side-brand-txt">
       <h1 id="appName" class="{% if is_admin %}editable{% endif %}" title="{% if is_admin %}Cliquer pour renommer{% endif %}">{{ app_name }}</h1>
-      <span>Gestion de projet</span>
+      <span>Project & Quality</span>
     </div>
   </div>
-  <div class="toolbar">
+  <nav class="side-nav">
+    <div class="side-group">Pilotage</div>
+    <a class="tab active" data-tab="dash"><span class="ic">📊</span><span class="lb">Tableau de bord</span></a>
+    <a class="tab" data-tab="synth"><span class="ic">📈</span><span class="lb">Synthèse projet</span></a>
+    <div class="side-group">Travail</div>
+    <a class="tab" data-tab="tasks"><span class="ic">✓</span><span class="lb">Tâches</span></a>
+    <a class="tab" data-tab="kanban"><span class="ic">⠿</span><span class="lb">Kanban</span></a>
+    <a class="tab" data-tab="list"><span class="ic">📋</span><span class="lb">Liste</span></a>
+    <a class="tab" data-tab="cal"><span class="ic">📅</span><span class="lb">Calendrier</span></a>
+    <a class="tab" data-tab="capacity"><span class="ic">💪</span><span class="lb">Capacité</span></a>
+    <div class="side-group">Équipe</div>
+    <a class="tab" data-tab="team"><span class="ic">👥</span><span class="lb">Équipe</span></a>
+    <a class="tab" data-tab="absence"><span class="ic">🌴</span><span class="lb">Absences</span></a>
+    <a class="tab" data-tab="alerts"><span class="ic">⚠️</span><span class="lb">Alertes</span><span class="badge hidden" id="alertBadge">0</span></a>
+    <div class="side-group">Qualité</div>
+    <a class="tab" data-tab="docs"><span class="ic">📄</span><span class="lb">Documents</span></a>
+    {% if is_admin %}<a class="tab" data-tab="audit"><span class="ic">🔍</span><span class="lb">Audit</span></a>{% endif %}
+  </nav>
+  <div class="side-foot">
     <div class="user-chip">
       <div class="ava" id="meAva"></div>
-      <span>{{ user.name }}</span>
-      {% if is_admin %}<span class="role-tag">ADMIN</span>{% endif %}
+      <div style="flex:1;min-width:0">
+        <div class="uc-name">{{ user.name }}</div>
+        {% if is_admin %}<span class="role-tag">ADMIN</span>{% else %}<span class="uc-role">Utilisateur</span>{% endif %}
+      </div>
     </div>
-    <button class="btn ghost" id="btnNotif" title="Notifications">🔔 <span id="notifCount" class="badge hidden">0</span></button>
-    <div class="notif-dropdown hidden" id="notifDropdown"></div>
-    <button class="btn ghost" id="btnImportDoc">📄 Importer un document</button>
-    <input type="file" id="docInput" accept=".pdf,.docx,.txt,.md" class="hidden">
-    <a href="/logout" class="btn ghost">Déconnexion</a>
+    <a href="/logout" class="side-logout" title="Déconnexion">⏻ Déconnexion</a>
   </div>
-</header>
+</aside>
+<div class="sidebar-scrim" id="sidebarScrim"></div>
 
-<nav>
-  <div class="tab active" data-tab="dash">Tableau de bord</div>
-  <div class="tab" data-tab="synth">Synthèse projet</div>
-  <div class="tab" data-tab="tasks">Tâches</div>
-  <div class="tab" data-tab="team">Équipe</div>
-  <div class="tab" data-tab="absence">Absences</div>
-  <div class="tab" data-tab="alerts">Alertes <span class="badge hidden" id="alertBadge">0</span></div>
-  <div class="tab" data-tab="kanban">⠿ Kanban</div>
-  <div class="tab" data-tab="cal">📅 Calendrier</div>
-  <div class="tab" data-tab="list">📋 Liste</div>
-  <div class="tab" data-tab="docs">📄 Documents</div>
-  <div class="tab" data-tab="capacity">💪 Capacité</div>
-  {% if is_admin %}<div class="tab" data-tab="audit">🔍 Audit</div>{% endif %}
-</nav>
+<div class="app-main">
+  <header class="topbar">
+    <button class="icon-btn only-mobile" id="sidebarToggle" title="Menu">☰</button>
+    <div class="projbar">
+      <label>Projet</label>
+      <select id="projSelect"></select>
+      {% if is_admin %}
+      <button class="btn sm" id="btnAddProj">+ Nouveau</button>
+      <button class="btn sm ghost" id="btnEditProj">Renommer</button>
+      <button class="btn sm ghost" id="btnDelProj">Supprimer</button>
+      {% endif %}
+    </div>
+    <div class="topbar-actions">
+      <button class="btn ghost sm" id="btnGlobalSearch" title="Rechercher (Ctrl+K)">🔍 <span class="hide-sm">Rechercher</span> <kbd class="hide-sm">⌘K</kbd></button>
+      <button class="btn ghost sm" id="btnImportDoc">📄 <span class="hide-sm">Importer</span></button>
+      <input type="file" id="docInput" accept=".pdf,.docx,.txt,.md" class="hidden">
+      <button class="icon-btn" id="btnNotif" title="Notifications">🔔<span id="notifCount" class="badge hidden">0</span></button>
+      <div class="notif-dropdown hidden" id="notifDropdown"></div>
+    </div>
+  </header>
 
-<div class="filter-bar hidden" id="filterBar">
-  <span style="font-size:12px;font-weight:700;color:var(--mut)">FILTRES :</span>
-  <div id="filterChips" class="row" style="gap:6px;flex-wrap:wrap"></div>
-  <button class="btn sm ghost" id="btnClearFilters">✕ Effacer</button>
-</div>
-
-<div class="projbar">
-  <label>Projet :</label>
-  <select id="projSelect"></select>
-  {% if is_admin %}
-  <button class="btn sm" id="btnAddProj">+ Nouveau projet</button>
-  <button class="btn sm ghost" id="btnEditProj">Renommer</button>
-  <button class="btn sm ghost" id="btnDelProj">Supprimer</button>
-  {% endif %}
-</div>
+  <div class="filter-bar hidden" id="filterBar">
+    <span style="font-size:12px;font-weight:700;color:var(--mut)">FILTRES :</span>
+    <div id="filterChips" class="row" style="gap:6px;flex-wrap:wrap"></div>
+    <button class="btn sm ghost" id="btnClearFilters">✕ Effacer</button>
+  </div>
 
 <main>
   <section id="sec-dash">
@@ -180,7 +194,9 @@
     </div>
     <div id="docsList" class="grid cards"></div>
   </section>
-</main>
+  </main>
+</div><!-- /app-main -->
+</div><!-- /app-shell -->
 
 <!-- MODALES -->
 <div class="modal-bg" id="taskModal"><div class="modal">

@@ -256,7 +256,11 @@ def on_startup():
             s.add(u); s.commit()
             print(f"[Atelier] Admin créé : {admin_email} / {admin_password}")
         if not _setting(s, "app_name"):
-            _set_setting(s, "app_name", "Atelier")
+            _set_setting(s, "app_name", "Helix")
+        # Rebranding unique vers "Helix" (ne s'applique qu'une seule fois)
+        if not _setting(s, "branding_helix"):
+            _set_setting(s, "app_name", "Helix")
+            _set_setting(s, "branding_helix", "1")
 
 # ---------------- Pages ----------------
 @app.get("/", response_class=HTMLResponse)
@@ -266,7 +270,7 @@ def home(request: Request, s: Session = Depends(get_session)):
         return RedirectResponse("/login")
     return templates.TemplateResponse("app.html", {
         "request": request, "user": u,
-        "app_name": _setting(s, "app_name", "Atelier"),
+        "app_name": _setting(s, "app_name", "Helix"),
         "app_logo": _setting(s, "app_logo", ""),
         "is_admin": u.role == "admin",
         "must_change_password": u.must_change_password
@@ -276,7 +280,7 @@ def home(request: Request, s: Session = Depends(get_session)):
 def login_page(request: Request, s: Session = Depends(get_session)):
     return templates.TemplateResponse("login.html", {
         "request": request,
-        "app_name": _setting(s, "app_name", "Atelier"),
+        "app_name": _setting(s, "app_name", "Helix"),
         "app_logo": _setting(s, "app_logo", "")
     })
 
@@ -782,12 +786,12 @@ def ack_all(u: User = Depends(require_user), s: Session = Depends(get_session)):
 # ---------------- API : Settings (branding) ----------------
 @app.get("/api/settings")
 def get_settings(s: Session = Depends(get_session)):
-    return {"app_name": _setting(s, "app_name", "Atelier"),
+    return {"app_name": _setting(s, "app_name", "Helix"),
             "app_logo": _setting(s, "app_logo", "")}
 
 @app.put("/api/settings")
 def update_settings(data: dict, u: User = Depends(require_admin), s: Session = Depends(get_session)):
-    if "app_name" in data: _set_setting(s, "app_name", data["app_name"].strip() or "Atelier")
+    if "app_name" in data: _set_setting(s, "app_name", data["app_name"].strip() or "Helix")
     if "app_logo" in data: _set_setting(s, "app_logo", data["app_logo"])
     return {"ok": True}
 
@@ -1179,7 +1183,7 @@ def _generate_weekly_report():
             projects  = s.exec(select(Project)).all()
             all_tasks = s.exec(select(Task)).all()
             users     = {x.id: x.name for x in s.exec(select(User)).all()}
-            app_name  = _setting(s, "app_name", "Atelier")
+            app_name  = _setting(s, "app_name", "Helix")
 
         today_str = datetime.utcnow().strftime("%d/%m/%Y")
         body  = f"Rapport hebdomadaire — {today_str}\n"

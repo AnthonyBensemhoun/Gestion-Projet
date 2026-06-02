@@ -566,13 +566,14 @@ function fillSelects(){
 
 /* ====== Projets ====== */
 async function addProject(){
-  const n=prompt('Nom du nouveau projet :');if(!n||!n.trim())return;
+  const n=prompt('Nom du nouveau projet :');if(!n||!n.trim())return null;
   const d=prompt('Description (optionnelle) :')||'';
   try{const p=await api('/api/projects',{method:'POST',body:{name:n.trim(),description:d.trim()}});
     state.currentProject=p.id;localStorage.setItem('atelier_curproj',p.id);
     await loadAll();
     toast(`✅ Projet « ${n.trim()} » créé — tu en es le chef de projet`);
-  }catch(e){toast(e.message,'err');}
+    return p;
+  }catch(e){toast(e.message,'err');return null;}
 }
 async function editProject(){
   const p=projById(state.currentProject);if(!p)return;
@@ -2766,12 +2767,32 @@ const TOUR_STEPS=[
   {sel:'#btnAddProj', tab:'dash', pos:'bottom', demo:'create', title:'📁 Les projets', text:"On vient de créer un <strong>projet exemple</strong> avec quelques tâches (il sera supprimé à la fin 👌). Pour créer le tien : clique « + Nouveau » — tu en deviens le chef de projet."},
   {sel:'#btnImportGantt', tab:'dash', pos:'bottom', title:'📥 Importer un planning', text:"Tu as déjà un planning (Gantt PDF) d'un fournisseur ? Importe-le : l'IA crée les tâches automatiquement."},
   {sel:'.side-nav .tab[data-tab="tasks"]', tab:'tasks', pos:'right', title:'✓ Tâches', text:"Voici les tâches du projet exemple. Crée, suis et assigne-les. Les chefs de projet peuvent les assigner à d'autres (avec notification + email)."},
-  {sel:'.side-nav .tab[data-tab="docs"]', tab:'docs', pos:'right', title:'📄 Documents qualité', text:"On a aussi ajouté un <strong>document exemple</strong> rangé dans le répertoire « Validation ». Workflow par phases, signature électronique, lecteur avec commentaires…"},
-  {sel:'#btnNotif', pos:'bottom', title:'🔔 Notifications', text:"Tu seras prévenu ici quand un document ou une tâche t'est assigné, ou quand on te mentionne."},
+  {sel:'.side-nav .tab[data-tab="docs"]', tab:'docs', pos:'right', title:'📄 Documents qualité', text:"On a aussi ajouté un <strong>document exemple</strong> rangé par répertoire (« Validation »). Regardons-le de près 👇"},
+  // ----- Deep-dive Documents (sur le document exemple) -----
+  {run:()=>{ if(_tourDemo.docId) openDocViewer(_tourDemo.docId); }, center:true, title:'📄 Le lecteur de document', text:"Le document s'ouvre dans un <strong>lecteur intégré</strong> : les <strong>PDF</strong> s'affichent tels quels et les fichiers <strong>Word (.docx)</strong> sont convertis en HTML pour la lecture. Le filigrane « COPIE NON CONTRÔLÉE » rappelle que la version officielle reste celle du QMS."},
+  {sel:'#dvPreview', pos:'right', title:'👁️ Aperçu', text:"Tu lis le document directement, sans le télécharger. Pour la version exacte mise en forme, le bouton « Télécharger l'original » est toujours là."},
+  {sel:'#dvSide .dv-actions', pos:'left', title:'🔒 Verrouiller & éditer', text:"Pour modifier : clique « Verrouiller / éditer ». Tu prends la main (personne d'autre ne peut écrire), tu <strong>télécharges</strong>, tu modifies dans Word, puis tu <strong>ré-uploades</strong> une nouvelle version. C'est le check-out / check-in, comme dans un vrai QMS."},
+  {sel:'#dvCommentInput', pos:'top', title:'💬 Commenter', text:"Écris un commentaire visible par toute l'équipe. Tape « @ » pour mentionner quelqu'un — il reçoit une notification."},
+  {sel:'#dvPlaceBtn', pos:'top', title:'📍 Commentaire ancré', text:"Tu peux placer un commentaire à un endroit PRÉCIS du document : écris, clique 📍, puis clique dans la page. Une épingle apparaît et le commentaire y est rattaché."},
+  {sel:'#dvWorkflow', pos:'top', title:'⚙ Faire avancer (pousser)', text:"Pour « pousser » le document à la phase suivante, ouvre « Workflow & signatures »."},
+  {run:()=>{ closeModal('docViewerModal'); if(_tourDemo.docId) openDocDetail(_tourDemo.docId); }, sel:'#f_docPhase', pos:'bottom', title:'➡️ Pousser de phase', text:"Choisis la <strong>phase suivante</strong> (Rédaction → Revue équipe → Revue QA → Approbation → Prêt QMS), assigne une personne, coche « prévenir par email », puis « Valider la transition ». Le document avance et la personne est notifiée."},
+  {sel:'#btnDocTransition', pos:'top', title:'✒️ Signature électronique', text:"Sur les phases <strong>Approbation</strong> et <strong>Prêt QMS</strong>, l'app demande une signature : ré-saisie du mot de passe + motif. C'est tracé de façon immuable (esprit 21 CFR Part 11)."},
+  // ----- Suite -----
+  {run:()=>{ closeModal('docDetailModal'); closeModal('docViewerModal'); }, sel:'#btnNotif', pos:'bottom', title:'🔔 Notifications', text:"Tu es prévenu ici dès qu'un document ou une tâche t'est assigné, ou qu'on te mentionne."},
   {sel:'#manualLink', pos:'right', title:'📘 Tout le détail en PowerPoint', text:"Pour aller plus loin, télécharge le manuel utilisateur complet.",
    action:'<a class="btn sm" href="/api/manual.pptx" style="margin-bottom:10px;display:inline-flex">📘 Télécharger le manuel</a>'},
-  {center:true, last:true, title:'🚀 À toi de jouer !', text:"Tu connais l'essentiel. Dernière étape : <strong>crée ton premier vrai projet</strong> pour démarrer.",
+  {center:true, title:'🚀 À toi de jouer !', text:"Tu connais l'essentiel. Dernière étape : <strong>crée ton premier vrai projet</strong> pour démarrer.",
    action:'<button class="btn primary" id="tourCreateProj" style="margin-bottom:8px;font-size:15px;padding:11px 22px">📁 Créer mon premier projet</button>'},
+  // ----- Après création du vrai projet -----
+  {center:true, title:'🎉 Bravo, projet créé ! 🥳', text:"Excellent 👏 Maintenant, créons ensemble ta <strong>première tâche</strong>, champ par champ."},
+  {run:()=>openTask(), sel:'#f_title', pos:'bottom', title:'1️⃣ Le titre', text:"Donne un titre clair et actionnable (ex. « Rédiger le protocole de validation »)."},
+  {sel:'#f_desc', pos:'bottom', title:'2️⃣ La description', text:"Précise le contenu, le périmètre, les attendus (optionnel mais utile)."},
+  {sel:'#f_assignee', pos:'bottom', title:'3️⃣ Assigné à', text:"Choisis qui réalise la tâche. La personne est notifiée (in-app + email)."},
+  {sel:'#f_prio', pos:'bottom', title:'4️⃣ La priorité', text:"Haute, moyenne ou basse — ça pondère la charge de l'équipe dans la vue Capacité."},
+  {sel:'#f_due', pos:'bottom', title:"5️⃣ L'échéance", text:"Fixe la date limite : elle alimente le calendrier, le Gantt et les alertes de retard."},
+  {sel:'#f_prog', pos:'top', title:"6️⃣ L'avancement", text:"Glisse le curseur d'avancement au fil de l'eau (100% = terminé)."},
+  {sel:'#btnSaveTask', pos:'top', title:'7️⃣ Enregistrer', text:"Clique « Enregistrer » pour créer ta première tâche, puis « Suivant » pour finir."},
+  {run:()=>closeModal('taskModal'), center:true, last:true, title:'✅ Ça y est, tu es prêt !', text:"Tu sais créer un projet et des tâches, gérer tes documents (lecteur, verrouillage, commentaires, signatures) et suivre ton équipe. Bonne organisation avec Helix 🚀"},
 ];
 let _tourI=0, _tourDir=1, _tourDemo={projectId:null,docId:null}, _tourPrevProject=null;
 function ensureTourEls(){
@@ -2812,6 +2833,7 @@ async function tourCleanupDemo(){
 }
 async function endTour(){
   ['tourOverlay','tourPop'].forEach(id=>{const e=$(id);if(e)e.remove();});
+  ['taskModal','docViewerModal','docDetailModal'].forEach(id=>{try{closeModal(id);}catch{}});
   mePrefs.tour_done=true;saveMePrefs();
   await tourCleanupDemo();
 }
@@ -2821,6 +2843,7 @@ async function showTourStep(){
   if(!step){endTour();return;}
   if(step.tab){tab(step.tab);if(step.tab==='me'){try{await renderMe();}catch{}}await new Promise(r=>setTimeout(r,300));}
   if(step.demo==='create'){await tourCreateDemo();await new Promise(r=>setTimeout(r,200));}
+  if(step.run){try{step.run();}catch{} await new Promise(r=>setTimeout(r,650));}
   const el=step.center?null:document.querySelector(step.sel);
   if(step.sel && !el){_tourI+=_tourDir;if(_tourI<0||_tourI>=TOUR_STEPS.length){endTour();return;}return showTourStep();}
   ensureTourEls();
@@ -2852,14 +2875,19 @@ async function showTourStep(){
   $('tourNext').onclick=()=>{_tourDir=1;_tourI++;showTourStep();};
   if($('tourPrev'))$('tourPrev').onclick=()=>{_tourDir=-1;_tourI--;showTourStep();};
   $('tourSkip').onclick=endTour;
-  // Bouton final : créer son premier vrai projet
-  if($('tourCreateProj')) $('tourCreateProj').onclick=async()=>{ await endTour(); addProject(); };
+  // Bouton final : créer son premier vrai projet, puis CONTINUER (félicitations → tâche)
+  if($('tourCreateProj')) $('tourCreateProj').onclick=async()=>{
+    await tourCleanupDemo();              // retire les exemples
+    const p=await addProject();           // prompt + création du vrai projet
+    if(!p) return;                        // annulé → on reste sur l'étape
+    _tourDir=1;_tourI++;showTourStep();   // continue : 🎉 → création de tâche guidée
+  };
 }
 if($('tourBtn')) $('tourBtn').addEventListener('click',startTour);
-// Touche Entrée = avancer · Échap = quitter (pendant la visite)
+// Touche Entrée = avancer (ou créer le projet si on est sur l'étape CTA) · Échap = quitter
 document.addEventListener('keydown',e=>{
   if(!$('tourPop'))return;
-  if(e.key==='Enter'){e.preventDefault();const n=$('tourNext');if(n)n.click();}
+  if(e.key==='Enter'){e.preventDefault();const c=$('tourCreateProj');(c||$('tourNext'))?.click();}
   else if(e.key==='Escape'){e.preventDefault();endTour();}
 });
 

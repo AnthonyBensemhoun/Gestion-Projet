@@ -2758,30 +2758,69 @@ if(ME.must_change_password) $('changePwModal').classList.add('show');
 
 /* ====== Visite guidée interactive ====== */
 const TOUR_STEPS=[
-  {center:true, title:'Bienvenue dans Helix 👋', text:"Petite visite guidée pour découvrir l'application, onglet par onglet. Tu pourras la relancer à tout moment via « 🎓 Visite guidée » en bas du menu."},
+  {center:true, title:'Bienvenue dans Helix 👋', text:"Petite visite guidée pour découvrir l'application, onglet par onglet. On va même créer un <strong>projet</strong> et un <strong>document exemple</strong> (supprimés à la fin). 👉 Astuce : appuie sur <strong>Entrée</strong> pour avancer."},
   {sel:'.side-nav .tab[data-tab="me"]', tab:'me', pos:'right', title:'🏠 Mon espace', text:"Ta page d'accueil personnelle : tes projets, tes tâches (triées par urgence) et tes documents assignés."},
   {sel:'#meContent .me-widgets', tab:'me', pos:'top', title:'🧩 Tes widgets', text:"Personnalise ton espace : ajoute une note, une horloge, un mémo, un compte à rebours… Tout est sauvegardé sur ton compte."},
   {sel:'.side-nav .tab[data-tab="dash"]', tab:'dash', pos:'right', title:'📊 Tableau de bord', text:"La vue d'ensemble du projet sélectionné : indicateurs clés, graphiques, avancement et alertes."},
   {sel:'.side-nav .tab[data-tab="kpi"]', tab:'kpi', pos:'right', title:'🎯 KPI Service', text:"Le cockpit transverse : tes indicateurs consolidés sur TOUS les projets."},
-  {sel:'#btnAddProj', tab:'dash', pos:'bottom', title:'📁 Crée ton premier projet', text:"C'est ici que tout commence ! Clique sur « + Nouveau » pour créer un projet — tu en deviens le chef de projet."},
+  {sel:'#btnAddProj', tab:'dash', pos:'bottom', demo:'create', title:'📁 Les projets', text:"On vient de créer un <strong>projet exemple</strong> avec quelques tâches (il sera supprimé à la fin 👌). Pour créer le tien : clique « + Nouveau » — tu en deviens le chef de projet."},
   {sel:'#btnImportGantt', tab:'dash', pos:'bottom', title:'📥 Importer un planning', text:"Tu as déjà un planning (Gantt PDF) d'un fournisseur ? Importe-le : l'IA crée les tâches automatiquement."},
-  {sel:'.side-nav .tab[data-tab="tasks"]', tab:'tasks', pos:'right', title:'✓ Tâches', text:"Crée, suis et assigne les tâches. Les chefs de projet peuvent les assigner à d'autres (avec notification + email)."},
-  {sel:'.side-nav .tab[data-tab="docs"]', tab:'docs', pos:'right', title:'📄 Documents qualité', text:"Le circuit documentaire complet : workflow par phases, signature électronique, lecteur avec commentaires, répertoires."},
+  {sel:'.side-nav .tab[data-tab="tasks"]', tab:'tasks', pos:'right', title:'✓ Tâches', text:"Voici les tâches du projet exemple. Crée, suis et assigne-les. Les chefs de projet peuvent les assigner à d'autres (avec notification + email)."},
+  {sel:'.side-nav .tab[data-tab="docs"]', tab:'docs', pos:'right', title:'📄 Documents qualité', text:"On a aussi ajouté un <strong>document exemple</strong> rangé dans le répertoire « Validation ». Workflow par phases, signature électronique, lecteur avec commentaires…"},
   {sel:'#btnNotif', pos:'bottom', title:'🔔 Notifications', text:"Tu seras prévenu ici quand un document ou une tâche t'est assigné, ou quand on te mentionne."},
-  {sel:'#manualLink', pos:'right', last:true, title:'📘 Tout le détail en PowerPoint', text:"Et voilà ! Pour aller plus loin, télécharge le manuel utilisateur complet.",
-   action:'<a class="btn sm primary" href="/api/manual.pptx" style="margin-bottom:10px;display:inline-flex">📘 Télécharger le manuel</a>'},
+  {sel:'#manualLink', pos:'right', title:'📘 Tout le détail en PowerPoint', text:"Pour aller plus loin, télécharge le manuel utilisateur complet.",
+   action:'<a class="btn sm" href="/api/manual.pptx" style="margin-bottom:10px;display:inline-flex">📘 Télécharger le manuel</a>'},
+  {center:true, last:true, title:'🚀 À toi de jouer !', text:"Tu connais l'essentiel. Dernière étape : <strong>crée ton premier vrai projet</strong> pour démarrer.",
+   action:'<button class="btn primary" id="tourCreateProj" style="margin-bottom:8px;font-size:15px;padding:11px 22px">📁 Créer mon premier projet</button>'},
 ];
-let _tourI=0, _tourDir=1;
+let _tourI=0, _tourDir=1, _tourDemo={projectId:null,docId:null}, _tourPrevProject=null;
 function ensureTourEls(){
   if(!$('tourOverlay')){const o=document.createElement('div');o.id='tourOverlay';o.className='tour-overlay';o.innerHTML='<div class="tour-spot" id="tourSpot"></div>';document.body.appendChild(o);}
   if(!$('tourPop')){const p=document.createElement('div');p.id='tourPop';p.className='tour-pop';document.body.appendChild(p);}
 }
-function endTour(){['tourOverlay','tourPop'].forEach(id=>{const e=$(id);if(e)e.remove();});mePrefs.tour_done=true;saveMePrefs();}
-function startTour(){_tourI=0;_tourDir=1;ensureTourEls();showTourStep();}
+async function tourCreateDemo(){
+  if(!CAN_PROJECTS||_tourDemo.projectId)return;
+  try{
+    const p=await api('/api/projects',{method:'POST',body:{name:'🎓 Projet exemple (tutoriel)',description:'Projet de démonstration — supprimé à la fin de la visite.'}});
+    _tourDemo.projectId=p.id;
+    const mk=(title,prio,o1,o2,st,pg)=>api('/api/tasks',{method:'POST',body:{project_id:p.id,title,priority:prio,start_date:addDays(o1),due_date:addDays(o2),status:st,progress:pg}});
+    await mk('Rédiger le cahier des charges','h',0,5,'prog',40);
+    await mk('Revue avec l’équipe','m',5,8,'todo',0);
+    await mk('Validation finale','m',8,12,'todo',0);
+    const fd=new FormData();
+    fd.append('name','SOP exemple — Tutoriel');fd.append('doc_type','SOP');fd.append('folder','Validation');
+    fd.append('project_id',p.id);fd.append('description','Document de démonstration.');
+    fd.append('file',new File([new Blob(['Document exemple généré par la visite guidée Helix.\n\nCeci est un fichier de démonstration, supprimé à la fin du tutoriel.'],{type:'text/plain'})],'SOP-exemple.txt'));
+    const r=await fetch('/api/documents',{method:'POST',body:fd});
+    if(r.ok){const d=await r.json();_tourDemo.docId=d.id;}
+    state.currentProject=p.id;localStorage.setItem('atelier_curproj',p.id);
+    await loadAll();
+  }catch(e){/* silencieux */}
+}
+async function tourCleanupDemo(){
+  try{
+    if(_tourDemo.docId) await api('/api/documents/'+_tourDemo.docId,{method:'DELETE'}).catch(()=>{});
+    if(_tourDemo.projectId) await api('/api/projects/'+_tourDemo.projectId,{method:'DELETE'}).catch(()=>{});
+  }catch{}
+  const had=_tourDemo.projectId;
+  _tourDemo={projectId:null,docId:null};
+  if(had){
+    state.currentProject=_tourPrevProject||null;
+    if(state.currentProject)localStorage.setItem('atelier_curproj',state.currentProject);else localStorage.removeItem('atelier_curproj');
+    await loadAll();
+  }
+}
+async function endTour(){
+  ['tourOverlay','tourPop'].forEach(id=>{const e=$(id);if(e)e.remove();});
+  mePrefs.tour_done=true;saveMePrefs();
+  await tourCleanupDemo();
+}
+function startTour(){_tourI=0;_tourDir=1;_tourPrevProject=state.currentProject;ensureTourEls();showTourStep();}
 async function showTourStep(){
   const step=TOUR_STEPS[_tourI];
   if(!step){endTour();return;}
   if(step.tab){tab(step.tab);if(step.tab==='me'){try{await renderMe();}catch{}}await new Promise(r=>setTimeout(r,300));}
+  if(step.demo==='create'){await tourCreateDemo();await new Promise(r=>setTimeout(r,200));}
   const el=step.center?null:document.querySelector(step.sel);
   if(step.sel && !el){_tourI+=_tourDir;if(_tourI<0||_tourI>=TOUR_STEPS.length){endTour();return;}return showTourStep();}
   ensureTourEls();
@@ -2813,8 +2852,16 @@ async function showTourStep(){
   $('tourNext').onclick=()=>{_tourDir=1;_tourI++;showTourStep();};
   if($('tourPrev'))$('tourPrev').onclick=()=>{_tourDir=-1;_tourI--;showTourStep();};
   $('tourSkip').onclick=endTour;
+  // Bouton final : créer son premier vrai projet
+  if($('tourCreateProj')) $('tourCreateProj').onclick=async()=>{ await endTour(); addProject(); };
 }
 if($('tourBtn')) $('tourBtn').addEventListener('click',startTour);
+// Touche Entrée = avancer · Échap = quitter (pendant la visite)
+document.addEventListener('keydown',e=>{
+  if(!$('tourPop'))return;
+  if(e.key==='Enter'){e.preventDefault();const n=$('tourNext');if(n)n.click();}
+  else if(e.key==='Escape'){e.preventDefault();endTour();}
+});
 
 loadAll().then(async ()=>{
   if($('sec-me') && !$('sec-me').classList.contains('hidden')){try{await renderMe();}catch{}}

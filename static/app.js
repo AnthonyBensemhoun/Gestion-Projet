@@ -21,8 +21,18 @@ function today(){return new Date().toISOString().slice(0,10);}
 function addDays(n){return new Date(Date.now()+n*864e5).toISOString().slice(0,10);}
 function daysBetween(a,b){return Math.round((new Date(b)-new Date(a))/864e5);}
 function fmtDate(d){if(!d)return '—';const p=d.split('-');return p[2]+'/'+p[1]+'/'+p[0];}
-const AVA = ['#e8642f','#f3a712','#2e9e5b','#2f7fd6','#9b59b6','#e0729a','#1aa89a'];
-function avaColor(id){let h=0;const s=String(id);for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))%AVA.length;return AVA[h];}
+// Palette élargie de couleurs bien distinctes (24 teintes)
+const AVA = ['#e8642f','#2f7fd6','#2e9e5b','#9b59b6','#f3a712','#e0729a','#1aa89a','#d6383f',
+  '#5b6bd6','#3aa856','#c0529b','#e09020','#6a4fb3','#0e8e8e','#d65a5a','#4a90d9',
+  '#7cb342','#ab47bc','#ff7043','#26a69a','#ec407a','#8d6e63','#5c6bc0','#9e9d24'];
+// Couleur UNIQUE et stable par personne (basée sur sa position dans l'équipe triée par id)
+function avaColor(id){
+  const ordered=[...state.users].sort((a,b)=>a.id-b.id);
+  const idx=ordered.findIndex(u=>u.id===id);
+  if(idx>=0) return AVA[idx % AVA.length];
+  // fallback (projets ou id inconnu) : hachage
+  let h=0;const s=String(id);for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))%AVA.length;return AVA[h];
+}
 function initials(n){return n.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();}
 function userById(id){return state.users.find(u=>u.id===id);}
 function userName(id){const u=userById(id);return u?u.name:'Non assigné';}
@@ -269,6 +279,14 @@ const MONTHS_FR=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Ao�
 const DAYS_FR=['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
 let calYear=new Date().getFullYear(), calMonth=new Date().getMonth();
 
+function absenceIcon(kind){
+  const k=(kind||'').toLowerCase();
+  if(k.includes('congé')||k.includes('conge')||k.includes('vacance')) return '🌴';
+  if(k.includes('malad')) return '🤒';
+  if(k.includes('télé')||k.includes('tele')) return '🏠';
+  if(k.includes('format')) return '🎓';
+  return '📌';
+}
 function renderCalendar(){
   const c=$('calContent');if(!c)return;
   const ts=projTasks().filter(t=>t.due_date);
@@ -298,19 +316,41 @@ function renderCalendar(){
     const absPills=dayAbs.slice(0,MAX_A).map(a=>{
       const u=userById(a.user_id);
       const nm=u?u.name:'?';
+      const first=u?u.name.split(' ')[0]:'?';
       const col=u?avaColor(u.id):'#888';
-      return `<div class="cal-abs-pill" style="background:${col}" title="${esc(nm)} — ${esc(a.kind)}">${initials(nm)} <span style="opacity:.75;font-size:9px">${esc(a.kind.slice(0,9))}</span></div>`;
+      const ic=absenceIcon(a.kind);
+      return `<div class="cal-abs-pill" style="background:${col}" title="🌴 ${esc(nm)} — ${esc(a.kind)} (du ${fmtDate(a.from_date)} au ${fmtDate(a.to_date)})">${ic} ${esc(first)}</div>`;
     }).join('');
     const msPills=dayMs.map(m=>`<div class="cal-ms-pill" title="Jalon : ${esc(m.name)}">🏁 ${esc(m.name)}</div>`).join('');
     const extra=(dayTasks.length>MAX_T?dayTasks.length-MAX_T:0)+(dayAbs.length>MAX_A?dayAbs.length-MAX_A:0);
     const more=extra>0?`<div class="cal-more">+${extra} autres</div>`:'';
-    cells+=`<div class="cal-cell${isToday?' today':''}">
+    const hasAbs=dayAbs.length>0;
+    cells+=`<div class="cal-cell${isToday?' today':''}${hasAbs?' has-abs':''}">
       <span class="cal-date-num">${d}</span>
       <div class="cal-tasks">${msPills}${taskPills}${absPills}${more}</div>
     </div>`;
   }
   const rem=(startDow+totalDays)%7;
   if(rem!==0) for(let i=0;i<7-rem;i++) cells+='<div class="cal-cell other-month"></div>';
+
+  // Récap des absences du mois visible (qui est en congé, quand)
+  const monthStart=`${calYear}-${String(calMonth+1).padStart(2,'0')}-01`;
+  const monthEnd=`${calYear}-${String(calMonth+1).padStart(2,'0')}-${String(totalDays).padStart(2,'0')}`;
+  const monthAbs=state.absences.filter(a=>a.from_date<=monthEnd && a.to_date>=monthStart);
+  let absRoster='';
+  if(monthAbs.length){
+    const rows=monthAbs.sort((a,b)=>a.from_date<b.from_date?-1:1).map(a=>{
+      const u=userById(a.user_id);
+      const nm=u?u.name:'?';
+      const col=u?avaColor(u.id):'#888';
+      return `<span class="cal-abs-roster-item" title="${esc(a.kind)}">
+        <span class="cal-legend-dot" style="background:${col}"></span>
+        <strong>${esc(nm)}</strong> · ${absenceIcon(a.kind)} ${esc(a.kind)} <span style="color:var(--mut)">(${fmtDate(a.from_date)} → ${fmtDate(a.to_date)})</span>
+      </span>`;
+    }).join('');
+    absRoster=`<div class="cal-abs-roster"><strong style="font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px">🌴 Absences ce mois (${monthAbs.length})</strong><div class="cal-abs-roster-list">${rows}</div></div>`;
+  }
+
   c.innerHTML=`<div class="cal-nav">
     <button class="btn sm ghost" id="calPrev">← Précédent</button>
     <h3 class="cal-title">${MONTHS_FR[calMonth]} ${calYear}</h3>
@@ -319,9 +359,10 @@ function renderCalendar(){
   </div>
   <div class="cal-legend">
     <span class="cal-legend-item"><span class="cal-legend-dot" style="background:var(--info)"></span>Tâche</span>
-    <span class="cal-legend-item"><span class="cal-legend-dot" style="background:#e8642f"></span>Absence collaborateur</span>
+    <span class="cal-legend-item"><span class="cal-legend-dot" style="background:#e8642f"></span>Absence (couleur = personne)</span>
     <span class="cal-legend-item"><span class="cal-legend-dot" style="background:#9b59b6"></span>Jalon</span>
   </div>
+  ${absRoster}
   <div class="cal-grid">${headers}${cells}</div>`;
   $('calPrev').onclick=()=>{calMonth===0?(calMonth=11,calYear--):calMonth--;renderCalendar();};
   $('calNext').onclick=()=>{calMonth===11?(calMonth=0,calYear++):calMonth++;renderCalendar();};

@@ -411,7 +411,12 @@ input[type=checkbox]{accent-color:var(--acc);width:16px;height:16px;cursor:point
 .cal-ms-pill{font-size:10px;padding:2px 6px;border-radius:5px;background:rgba(155,89,182,.15);border-left:3px solid #9b59b6;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;cursor:default}
 .cal-legend{display:flex;gap:16px;justify-content:center;margin-bottom:12px;font-size:12px;color:var(--mut);flex-wrap:wrap}
 .cal-legend-item{display:flex;align-items:center;gap:5px}
-.cal-legend-dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex-shrink:0}
+.cal-legend-dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex-shrink:0;vertical-align:middle}
+.cal-cell.has-abs{background:repeating-linear-gradient(45deg,rgba(232,100,47,.04),rgba(232,100,47,.04) 8px,rgba(232,100,47,.09) 8px,rgba(232,100,47,.09) 16px)}
+.cal-abs-pill{font-weight:700}
+.cal-abs-roster{margin-bottom:14px;padding:10px 14px;background:var(--panel2);border-radius:var(--r-md,10px);border-left:3px solid #e8642f}
+.cal-abs-roster-list{display:flex;flex-wrap:wrap;gap:14px;margin-top:6px}
+.cal-abs-roster-item{display:inline-flex;align-items:center;gap:6px;font-size:12.5px}
 
 /* ---- KANBAN ---- */
 .kanban-board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start}

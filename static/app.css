@@ -209,6 +209,9 @@ kbd{font-family:'Space Grotesk',monospace;font-size:10px;background:var(--panel2
   background-repeat:no-repeat;background-position:right 11px center;
 }
 .projbar select:focus{border-color:var(--acc);outline:none;box-shadow:0 0 0 3px rgba(79,70,229,.12)}
+.proj-meta{display:inline-flex;align-items:center;margin-left:6px}
+.proj-lead-chip{font-size:11px;font-weight:600;padding:3px 9px;border-radius:99px;background:var(--panel2);border:1px solid var(--line);color:var(--mut);white-space:nowrap}
+.proj-lead-chip.mine{background:rgba(79,70,229,.1);border-color:rgba(79,70,229,.25);color:var(--acc)}
 
 @media(max-width:900px){
   .sidebar{position:fixed;left:0;top:0;transform:translateX(-100%);transition:transform var(--t-smooth);box-shadow:var(--shadow-lg)}
@@ -616,6 +619,25 @@ input[type=checkbox]{accent-color:var(--acc);width:16px;height:16px;cursor:point
   background-repeat:repeat}
 .doc-viewer-side{width:340px;flex-shrink:0;border-left:1px solid var(--line);overflow-y:auto;padding:16px;background:var(--panel)}
 .dv-frame{width:100%;height:100%;min-height:75vh;border:none;border-radius:8px;background:#fff;box-shadow:var(--shadow-sm)}
+.dv-content{position:relative}
+.dv-doc{position:relative;z-index:1}
+.dv-pdf-page{display:block;margin:0 auto 14px;box-shadow:var(--shadow);background:#fff;max-width:100%}
+.dv-anno{position:absolute;inset:0;z-index:4;pointer-events:none}
+.dv-anno.placing{pointer-events:auto;cursor:crosshair}
+.dv-pin{position:absolute;transform:translate(-50%,-50%);width:24px;height:24px;border-radius:50% 50% 50% 2px;
+  background:linear-gradient(150deg,var(--acc),var(--acc2));color:#fff;font-size:11px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;cursor:grab;pointer-events:auto;
+  box-shadow:0 3px 8px rgba(79,70,229,.45);border:2px solid #fff;z-index:8;transition:transform .12s}
+.dv-pin:hover{transform:translate(-50%,-50%) scale(1.18)}
+.dv-pin.drag{cursor:grabbing;transform:translate(-50%,-50%) scale(1.15)}
+.dv-pin.flash{animation:pinFlash 1.4s ease}
+@keyframes pinFlash{0%,100%{box-shadow:0 3px 8px rgba(79,70,229,.45)}30%{box-shadow:0 0 0 8px rgba(79,70,229,.35)}}
+.dv-comment.anchored{cursor:pointer;border-color:rgba(79,70,229,.3)}
+.dv-comment.anchored:hover{background:rgba(79,70,229,.06)}
+.dv-pin-num{color:var(--acc)}
+.dv-comment.flash{animation:cmtFlash 1.4s ease}
+@keyframes cmtFlash{0%,100%{background:var(--panel2)}30%{background:rgba(79,70,229,.15)}}
+.dv-comment-input #dvPlaceBtn.active{background:var(--acc);color:#fff;border-color:var(--acc)}
 .dv-note{background:rgba(79,70,229,.07);border:1px solid rgba(79,70,229,.18);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--ink);margin-bottom:14px}
 .dv-note a{color:var(--acc);font-weight:600}
 .dv-docx{display:flex;justify-content:center}

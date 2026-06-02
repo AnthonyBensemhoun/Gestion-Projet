@@ -2,6 +2,7 @@
 /* ====== État global ====== */
 const ME = window.CURRENT_USER;
 const IS_ADMIN = ME.is_admin;
+const CAN_PROJECTS = ME.can_manage_projects || ME.is_admin;  // admin ou Team Leader
 let state = {
   projects: [], tasks: [], users: [], absences: [], alerts: [], documents: [], notifications: [], notifUnread: 0,
   currentProject: localStorage.getItem('atelier_curproj') || null,
@@ -111,8 +112,17 @@ function renderAll(){
 
 function renderProjBar(){
   const sel=$('projSelect');
-  if(!state.projects.length){sel.innerHTML='<option value="">Aucun projet</option>';return;}
+  const meta=$('projMeta');
+  if(!state.projects.length){sel.innerHTML='<option value="">Aucun projet</option>';if(meta)meta.innerHTML='';return;}
   sel.innerHTML = state.projects.map(p=>`<option value="${p.id}"${p.id==state.currentProject?' selected':''}>${esc(p.name)}</option>`).join('');
+  // Info chef de projet du projet courant
+  if(meta){
+    const p=projById(state.currentProject);
+    if(p&&p.lead_name){
+      const mine=p.lead_id===ME.id;
+      meta.innerHTML=`<span class="proj-lead-chip${mine?' mine':''}">👤 Chef de projet : <strong>${esc(p.lead_name)}</strong>${mine?' (toi)':''}</span>`;
+    }else meta.innerHTML='';
+  }
 }
 
 function projectProgress(){
@@ -192,14 +202,14 @@ function renderTeam(){
     const n=state.tasks.filter(t=>t.assignee_id===u.id && t.status!=='done').length;
     const absent=isAbsentNow(u.id);
     const onlineDot=u.online?'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#2e9e5b;margin-right:5px;vertical-align:middle" title="En ligne"></span>':'';
-    const lastLogin=u.last_login?'Dernière connexion : '+new Date(u.last_login).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}):'Jamais connecté';
+    const lastLogin=u.last_login?'Dernière connexion : '+fmtDateTime(u.last_login):'Jamais connecté';
     return `<div class="card"><div class="person"><div class="ava" style="background:${avaColor(u.id)}">${initials(u.name)}</div>
-      <div style="flex:1"><h3 style="font-size:16px">${onlineDot}${esc(u.name)}</h3><div class="meta">${u.role==='admin'?'Administrateur':'Utilisateur'}</div></div></div>
+      <div style="flex:1"><h3 style="font-size:16px">${onlineDot}${esc(u.name)}</h3><div class="meta">${u.role==='admin'?'Administrateur':u.role==='lead'?'Team Leader':'Utilisateur'}</div></div></div>
       <div class="meta" style="margin-top:10px">✉ ${esc(u.email)}</div>
       <div class="meta" style="margin-top:4px;font-size:12px">🕐 ${lastLogin}</div>
       <div class="row" style="margin-top:8px"><span class="pill">${n} tâche(s) active(s)</span>
         ${absent?`<span class="pill absent">Absent aujourd&#39;hui</span>`:`<span class="pill ok">Disponible</span>`}
-        ${u.role==='admin'?'<span class="pill admin">Admin</span>':''}
+        ${u.role==='admin'?'<span class="pill admin">Admin</span>':u.role==='lead'?'<span class="pill admin">Team Leader</span>':''}
       </div>
       ${IS_ADMIN?`<div class="row" style="justify-content:flex-end;margin-top:10px;flex-wrap:wrap;gap:5px">
         ${u.email?`<button class="btn sm ghost" data-remind-person="${u.id}">✉ Rappel tâches</button>`:''}
@@ -557,7 +567,9 @@ async function addProject(){
   const d=prompt('Description (optionnelle) :')||'';
   try{const p=await api('/api/projects',{method:'POST',body:{name:n.trim(),description:d.trim()}});
     state.currentProject=p.id;localStorage.setItem('atelier_curproj',p.id);
-    await loadAll();}catch(e){alert(e.message);}
+    await loadAll();
+    toast(`✅ Projet « ${n.trim()} » créé — tu en es le chef de projet`);
+  }catch(e){toast(e.message,'err');}
 }
 async function editProject(){
   const p=projById(state.currentProject);if(!p)return;
@@ -889,7 +901,7 @@ function applyFilters(){
 const NOTIF_IC={doc_assigned:'📄',mention:'💬'};
 function fmtAgo(iso){
   if(!iso)return '';
-  const diff=(Date.now()-new Date(iso).getTime())/1000;
+  const diff=(Date.now()-parseTs(iso).getTime())/1000;
   if(diff<60)return "à l'instant";
   if(diff<3600)return Math.floor(diff/60)+' min';
   if(diff<86400)return Math.floor(diff/3600)+' h';
@@ -1184,7 +1196,7 @@ async function renderAudit(){
       'Création projet':'📁','Modification projet':'✏️','Suppression projet':'🗑️'};
     el.innerHTML=logs.map(l=>{
       const d=new Date(l.created_at);
-      const dt=d.toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+      const dt=fmtDateTime(l.created_at);
       const ic=ACTION_IC[l.action]||'•';
       return `<tr style="border-bottom:1px solid var(--line)">
         <td style="padding:8px 14px;white-space:nowrap;color:var(--mut);font-size:12px">${dt}</td>
@@ -1271,13 +1283,39 @@ async function renderMe(){
     </div>`;
   }).join('')||'<div class="empty">Aucun document chez toi</div>';
 
+  // Mes projets : ceux dont je suis chef de projet, créateur, ou où j'ai des tâches
+  const projStats=state.projects.map(p=>{
+    const pts=allTasks.filter(t=>t.project_id==p.id);
+    const mine=pts.filter(t=>t.assignee_id===ME.id);
+    const done=pts.filter(t=>t.status==='done').length;
+    return {p, total:pts.length, mineActive:mine.filter(t=>t.status!=='done').length,
+            pc:pts.length?Math.round(done/pts.length*100):0,
+            isLead:p.lead_id===ME.id, isCreator:p.created_by===ME.id, mineCount:mine.length};
+  }).filter(x=>x.isLead||x.isCreator||x.mineCount>0)
+    .sort((a,b)=>(b.isLead?1:0)-(a.isLead?1:0));
+  const projRows=projStats.map(x=>`<div class="me-row" data-open-project="${x.p.id}">
+      <span class="me-prio" style="background:${x.isLead?'var(--acc)':'var(--info)'}"></span>
+      <div style="flex:1;min-width:0">
+        <div class="me-row-title">📁 ${esc(x.p.name)} ${x.isLead?'<span class="proj-lead-chip mine" style="margin-left:4px">Chef de projet</span>':''}</div>
+        <div class="meta" style="font-size:11.5px">${x.pc}% · ${x.mineActive} tâche(s) active(s) pour toi · ${x.total} au total</div>
+        <div class="progress" style="margin-top:4px"><i style="width:${x.pc}%"></i></div>
+      </div>
+    </div>`).join('')||'<div class="empty">Aucun projet pour toi.'+(CAN_PROJECTS?' Crée-en un via « + Nouveau ».':'')+'</div>';
+
   el.innerHTML=hero+kpis+meWidgetsHtml()+`<div class="kpi-grid2" style="margin-top:18px">
+    <div class="panel"><div class="sec-h" style="margin-bottom:8px"><h2 style="font-size:15px">📁 Mes projets (${projStats.length})</h2></div>
+      <div style="max-height:420px;overflow:auto">${projRows}</div></div>
     <div class="panel"><div class="sec-h" style="margin-bottom:8px"><h2 style="font-size:15px">✓ Mes tâches (${myTasks.length})</h2></div>
       <div style="max-height:420px;overflow:auto">${taskRows}</div></div>
     <div class="panel"><div class="sec-h" style="margin-bottom:8px"><h2 style="font-size:15px">📄 Mes documents (${myDocs.length})</h2></div>
       <div style="max-height:420px;overflow:auto">${docRows}</div></div>
   </div>`;
 
+  el.querySelectorAll('[data-open-project]').forEach(row=>row.addEventListener('click',()=>{
+    const pid=row.dataset.openProject;
+    $('projSelect').value=pid;$('projSelect').dispatchEvent(new Event('change'));
+    tab('dash');
+  }));
   wireMeWidgets();
   el.querySelectorAll('[data-countup]').forEach(node=>{
     const target=parseFloat(node.dataset.countup)||0;const start=performance.now();const dur=750;
@@ -1371,7 +1409,7 @@ function wireMeWidgets(){
   if(_meClock){clearInterval(_meClock);_meClock=null;}
   if($('mwClock')){
     const upd=()=>{const el=$('mwClock');if(!el){clearInterval(_meClock);return;}const n=new Date();
-      el.innerHTML=`<div class="mw-time">${n.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</div><div class="mw-date">${n.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})}</div>`;};
+      el.innerHTML=`<div class="mw-time">${n.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div><div class="mw-date">${n.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})}</div>`;};
     upd();_meClock=setInterval(upd,1000);
   }
   // Note
@@ -1556,6 +1594,7 @@ const DOC_TYPES={SOP:'SOP',PROTO:'Protocole',REPORT:'Rapport',FORM:'Formulaire',
 const DOC_SIGN_PHASES=['approbation','pret_qms'];
 function docPhaseIndex(k){return DOC_PHASES.findIndex(p=>p.key===k);}
 let currentDocId=null, currentDocObj=null, docProjectFilter='';
+let _docComments=[], _placingComment=false;
 
 function fmtBytes(n){
   if(!n) return '0 o';
@@ -1563,9 +1602,15 @@ function fmtBytes(n){
   if(n<1048576) return (n/1024).toFixed(0)+' Ko';
   return (n/1048576).toFixed(1)+' Mo';
 }
+// Interprète un horodatage serveur (UTC naïf) et le convertit dans le fuseau local du navigateur
+function parseTs(iso){
+  if(!iso) return null;
+  const s=(iso.endsWith('Z')||/[+-]\d\d:?\d\d$/.test(iso))?iso:iso+'Z';
+  return new Date(s);
+}
 function fmtDateTime(iso){
   if(!iso) return '—';
-  return new Date(iso).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  return parseTs(iso).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});
 }
 
 async function renderDocs(){
@@ -1913,38 +1958,113 @@ async function openDocViewer(docId){
 }
 async function renderDocPreview(d, cur){
   const pv=$('dvPreview');
-  pv.innerHTML='<div class="dv-watermark"></div><div class="dv-content" id="dvContent"></div>';
-  const c=$('dvContent');
+  pv.innerHTML='<div class="dv-watermark"></div><div class="dv-content" id="dvContent"><div class="dv-doc" id="dvDoc"></div><div class="dv-anno" id="dvAnno"></div></div>';
+  const c=$('dvDoc');
   if(!cur){c.innerHTML='<div class="empty">Aucun fichier</div>';return;}
   const name=(cur.filename||'').toLowerCase();
   const ext=name.split('.').pop();
   const viewUrl='/api/documents/'+d.id+'/versions/'+cur.id+'/view';
   const dlUrl='/api/documents/'+d.id+'/versions/'+cur.id+'/download';
-  if(name.endsWith('.pdf')){
-    c.innerHTML=`<iframe class="dv-frame" src="${viewUrl}#toolbar=1"></iframe>`;
-  }else if(name.endsWith('.docx')){
-    c.innerHTML='<div class="dv-loading">Rendu du document…</div>';
-    try{
+  try{
+    if(name.endsWith('.pdf')){
+      if(window.pdfjsLib){ c.innerHTML='<div class="dv-loading">Rendu du PDF…</div>'; await renderPdfInto(c, viewUrl); }
+      else c.innerHTML=`<iframe class="dv-frame" src="${viewUrl}#toolbar=1"></iframe>`;
+    }else if(name.endsWith('.docx')){
+      c.innerHTML='<div class="dv-loading">Rendu du document…</div>';
       const blob=await (await fetch(viewUrl)).blob();
       c.innerHTML=`<div class="dv-note">ℹ️ Aperçu web — la mise en forme exacte peut différer. <a href="${dlUrl}">Télécharger l'original</a> pour la version officielle.</div><div class="dv-docx" id="dvDocx"></div>`;
-      if(window.docx&&docx.renderAsync){
-        await docx.renderAsync(blob, $('dvDocx'), null, {inWrapper:true, className:'docx', ignoreWidth:false});
-      }else{
-        $('dvDocx').innerHTML=`<div class="empty">Lecteur DOCX indisponible. <a href="${dlUrl}">Télécharger</a></div>`;
-      }
-    }catch(e){
-      c.innerHTML=`<div class="dv-noprev"><div style="font-size:42px">📄</div><p>Aperçu impossible.</p><a class="btn primary" href="${dlUrl}">⬇ Télécharger le document</a></div>`;
+      if(window.docx&&docx.renderAsync) await docx.renderAsync(blob, $('dvDocx'), null, {inWrapper:true, className:'docx'});
+      else $('dvDocx').innerHTML=`<div class="empty">Lecteur DOCX indisponible. <a href="${dlUrl}">Télécharger</a></div>`;
+    }else if(/\.(txt|md|csv)$/.test(name)){
+      const txt=await (await fetch(viewUrl)).text();const pre=document.createElement('pre');pre.className='dv-text';pre.textContent=txt;c.innerHTML='';c.appendChild(pre);
+    }else{
+      c.innerHTML=`<div class="dv-noprev"><div style="font-size:48px">📄</div><p>Aperçu non disponible pour ce format (.${esc(ext)}).<br>Word/Excel/PowerPoint s'ouvrent dans l'application bureautique.</p><a class="btn primary" href="${dlUrl}">⬇ Télécharger le document</a></div>`;
     }
-  }else if(/\.(txt|md|csv)$/.test(name)){
-    try{const txt=await (await fetch(viewUrl)).text();const pre=document.createElement('pre');pre.className='dv-text';pre.textContent=txt;c.innerHTML='';c.appendChild(pre);}
-    catch{c.innerHTML=`<div class="dv-noprev"><a class="btn primary" href="${dlUrl}">⬇ Télécharger</a></div>`;}
-  }else{
-    c.innerHTML=`<div class="dv-noprev">
-      <div style="font-size:48px">📄</div>
-      <p>Aperçu non disponible pour ce format (.${esc(ext)}).<br>Word/Excel/PowerPoint s'ouvrent dans l'application bureautique.</p>
-      <a class="btn primary" href="${dlUrl}">⬇ Télécharger le document</a>
-    </div>`;
+  }catch(e){
+    c.innerHTML=`<div class="dv-noprev"><div style="font-size:42px">📄</div><p>Aperçu impossible.</p><a class="btn primary" href="${dlUrl}">⬇ Télécharger le document</a></div>`;
   }
+  setupAnnoLayer();
+  renderDocAnno();
+}
+async function renderPdfInto(container, url){
+  const data=await (await fetch(url)).arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({data}).promise;
+  container.innerHTML='';
+  const W=Math.max(320,(container.clientWidth||640)-4);
+  for(let p=1;p<=pdf.numPages;p++){
+    const page=await pdf.getPage(p);
+    const base=page.getViewport({scale:1});
+    const scale=Math.min(2,W/base.width);
+    const vp=page.getViewport({scale});
+    const canvas=document.createElement('canvas');
+    canvas.className='dv-pdf-page';canvas.width=vp.width;canvas.height=vp.height;
+    container.appendChild(canvas);
+    await page.render({canvasContext:canvas.getContext('2d'),viewport:vp}).promise;
+  }
+}
+// Couche d'annotation : clic pour placer, épingles pour commentaires ancrés
+function setupAnnoLayer(){
+  const anno=$('dvAnno');if(!anno)return;
+  anno.onclick=(e)=>{
+    if(!_placingComment||e.target!==anno)return;
+    const c=$('dvContent');const rect=c.getBoundingClientRect();
+    const x=Math.max(0,Math.min(100,(e.clientX-rect.left)/rect.width*100));
+    const y=Math.max(0,Math.min(100,(e.clientY-rect.top)/rect.height*100));
+    finishPlacement(x,y);
+  };
+}
+function renderDocAnno(){
+  const anno=$('dvAnno');if(!anno)return;
+  anno.innerHTML='';let n=0;
+  (_docComments||[]).forEach(c=>{
+    if(c.anchor_x==null||c.anchor_y==null)return;
+    n++;
+    const pin=document.createElement('div');
+    pin.className='dv-pin';pin.style.left=c.anchor_x+'%';pin.style.top=c.anchor_y+'%';
+    pin.textContent=n;pin.title=c.author+' : '+c.text;pin.dataset.cid=c.id;
+    anno.appendChild(pin);
+    pin.addEventListener('click',ev=>{ev.stopPropagation();scrollListToComment(c.id);});
+    makePinDraggable(pin,c);
+  });
+}
+function makePinDraggable(pin,c){
+  pin.addEventListener('mousedown',e=>{
+    e.preventDefault();e.stopPropagation();
+    const cont=$('dvContent');let moved=false;pin.classList.add('drag');
+    function mv(ev){moved=true;const rect=cont.getBoundingClientRect();
+      let x=Math.max(0,Math.min(100,(ev.clientX-rect.left)/rect.width*100));
+      let y=Math.max(0,Math.min(100,(ev.clientY-rect.top)/rect.height*100));
+      pin.style.left=x+'%';pin.style.top=y+'%';pin._x=x;pin._y=y;}
+    function up(){document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up);pin.classList.remove('drag');
+      if(moved&&pin._x!=null){api('/api/doc-comments/'+c.id+'/anchor',{method:'PUT',body:{anchor_x:pin._x,anchor_y:pin._y}}).then(loadDocComments).catch(()=>{});}}
+    document.addEventListener('mousemove',mv);document.addEventListener('mouseup',up);
+  });
+}
+function startPlacement(){
+  const inp=$('dvCommentInput');
+  if(!inp||!inp.value.trim()){toast("Écris d'abord ton commentaire, puis place-le.",'warn');inp&&inp.focus();return;}
+  _placingComment=true;
+  const anno=$('dvAnno');if(anno)anno.classList.add('placing');
+  $('dvPlaceBtn')&&$('dvPlaceBtn').classList.add('active');
+  toast('📍 Clique dans le document pour placer ton commentaire');
+}
+function cancelPlacement(){_placingComment=false;const a=$('dvAnno');if(a)a.classList.remove('placing');$('dvPlaceBtn')&&$('dvPlaceBtn').classList.remove('active');}
+async function finishPlacement(x,y){
+  const inp=$('dvCommentInput');const text=inp.value.trim();
+  cancelPlacement();
+  if(!text)return;
+  await addDocComment({x,y});
+}
+function scrollDocToPin(cid){
+  const pin=document.querySelector('.dv-pin[data-cid="'+cid+'"]');if(!pin)return;
+  const pv=$('dvPreview');
+  pv.scrollTo({top:pin.offsetTop+ $('dvContent').offsetTop -100, behavior:'smooth'});
+  pin.classList.add('flash');setTimeout(()=>pin.classList.remove('flash'),1400);
+}
+function scrollListToComment(cid){
+  const row=document.querySelector('.dv-comment[data-cid="'+cid+'"]');if(!row)return;
+  row.scrollIntoView({block:'nearest',behavior:'smooth'});
+  row.classList.add('flash');setTimeout(()=>row.classList.remove('flash'),1400);
 }
 function renderDocViewerSide(d, cur){
   const isLockedByMe=d.locked_by===ME.id;
@@ -1976,16 +2096,19 @@ function renderDocViewerSide(d, cur){
     <div class="dv-actions">${actions}</div>
     ${lockMsg}
     <h3 style="font-size:14px;margin:16px 0 6px">💬 Commentaires</h3>
+    <div class="meta" style="font-size:11.5px;margin-bottom:6px">📍 = placé dans le document. Écris puis clique « Placer » et clique dans la page.</div>
     <div id="dvComments" class="dv-comments"><div class="empty" style="font-size:12px">Chargement…</div></div>
     <div class="dv-comment-input">
       <input id="dvCommentInput" placeholder="Commenter…  (@ pour mentionner)" autocomplete="off">
+      <button class="btn sm ghost" id="dvPlaceBtn" title="Placer le commentaire dans le document">📍</button>
       <button class="btn sm primary" id="dvCommentSend">Envoyer</button>
     </div>
     <h3 style="font-size:14px;margin:18px 0 6px">🗂 Historique du document</h3>
     <div class="dv-history">${histHtml}</div>`;
   const up=$('dvUpload'); if(up) up.addEventListener('click',()=>$('docVersionFile').click());
   const wf=$('dvWorkflow'); if(wf) wf.addEventListener('click',()=>{closeModal('docViewerModal');openDocDetail(d.id);});
-  const send=$('dvCommentSend'); if(send) send.addEventListener('click',addDocComment);
+  const send=$('dvCommentSend'); if(send) send.addEventListener('click',()=>addDocComment());
+  const placeBtn=$('dvPlaceBtn'); if(placeBtn) placeBtn.addEventListener('click',()=>{ _placingComment?cancelPlacement():startPlacement(); });
   const inp=$('dvCommentInput');
   if(inp){
     inp.addEventListener('keydown',e=>{
@@ -1997,31 +2120,39 @@ function renderDocViewerSide(d, cur){
 }
 async function loadDocComments(){
   if(!currentDocId)return;
-  try{const cs=await api('/api/documents/'+currentDocId+'/comments');renderDocCommentList(cs);}
+  try{_docComments=await api('/api/documents/'+currentDocId+'/comments');renderDocCommentList();renderDocAnno();}
   catch{const el=$('dvComments');if(el)el.innerHTML='<div class="empty" style="font-size:12px">Erreur de chargement</div>';}
 }
-function renderDocCommentList(cs){
+function renderDocCommentList(){
   const el=$('dvComments');if(!el)return;
-  el.innerHTML=cs.length?cs.map(c=>`<div class="dv-comment">
-    <div class="row" style="justify-content:space-between;align-items:center">
-      <strong style="font-size:12.5px">${esc(c.author)}</strong>
-      <div class="row" style="gap:6px"><span class="meta" style="font-size:11px">${fmtAgo(c.created_at)}</span>${(IS_ADMIN||c.user_id===ME.id)?`<button class="x" style="font-size:11px" data-del-doccomment="${c.id}">✕</button>`:''}</div>
-    </div>
-    <div style="font-size:13px;margin-top:2px">${highlightMentions(esc(c.text))}</div>
-  </div>`).join(''):'<div class="empty" style="font-size:12px">Aucun commentaire. Lance la discussion 💬</div>';
-  el.querySelectorAll('[data-del-doccomment]').forEach(b=>b.addEventListener('click',async function(){
-    try{await api('/api/doc-comments/'+this.dataset.delDoccomment,{method:'DELETE'});loadDocComments();}catch(e){toast(e.message,'err');}
+  const cs=_docComments||[];let n=0;
+  el.innerHTML=cs.length?cs.map(c=>{
+    const anchored=c.anchor_x!=null&&c.anchor_y!=null; if(anchored)n++;
+    return `<div class="dv-comment${anchored?' anchored':''}" data-cid="${c.id}"${anchored?` data-goto="${c.id}"`:''}>
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <strong style="font-size:12.5px">${anchored?`<span class="dv-pin-num">📍${n}</span> `:''}${esc(c.author)}</strong>
+        <div class="row" style="gap:6px"><span class="meta" style="font-size:11px">${fmtAgo(c.created_at)}</span>${(IS_ADMIN||c.user_id===ME.id)?`<button class="x" style="font-size:11px" data-del-doccomment="${c.id}">✕</button>`:''}</div>
+      </div>
+      <div style="font-size:13px;margin-top:2px">${highlightMentions(esc(c.text))}</div>
+    </div>`;
+  }).join(''):'<div class="empty" style="font-size:12px">Aucun commentaire. Lance la discussion 💬</div>';
+  el.querySelectorAll('[data-del-doccomment]').forEach(b=>b.addEventListener('click',async function(e){
+    e.stopPropagation();
+    try{await api('/api/doc-comments/'+this.dataset.delDoccomment,{method:'DELETE'});loadDocComments();}catch(ex){toast(ex.message,'err');}
   }));
-  el.scrollTop=el.scrollHeight;
+  el.querySelectorAll('[data-goto]').forEach(row=>row.addEventListener('click',()=>scrollDocToPin(row.dataset.goto)));
 }
-async function addDocComment(){
+async function addDocComment(anchor){
   const inp=$('dvCommentInput');if(!inp)return;
   const text=inp.value.trim();if(!text||!currentDocId)return;
   try{
     const mentions=extractMentions(text);
-    await api('/api/documents/'+currentDocId+'/comments',{method:'POST',body:{text,mentions}});
+    const body={text,mentions};
+    if(anchor){body.anchor_x=anchor.x;body.anchor_y=anchor.y;}
+    await api('/api/documents/'+currentDocId+'/comments',{method:'POST',body});
     inp.value='';hideMentionBox();
     loadDocComments();
+    if(anchor) toast('Commentaire placé dans le document 📍');
     if(mentions.length){toast(`${mentions.length} personne(s) notifiée(s)`);await loadNotifications();renderNotifBell();}
   }catch(e){toast(e.message,'err');}
 }
@@ -2366,10 +2497,13 @@ $('filterStatus').addEventListener('change',function(){state.filterStatus=this.v
 $('f_prog').addEventListener('input',function(){$('f_progVal').textContent=this.value;});
 $('f_status').addEventListener('change',function(){if(this.value==='done'){$('f_prog').value=100;$('f_progVal').textContent='100';}});
 
+// Boutons projet : admin OU Team Leader
+if(CAN_PROJECTS){
+  if($('btnAddProj')) $('btnAddProj').addEventListener('click',addProject);
+  if($('btnEditProj')) $('btnEditProj').addEventListener('click',editProject);
+  if($('btnDelProj')) $('btnDelProj').addEventListener('click',delProject);
+}
 if(IS_ADMIN){
-  $('btnAddProj').addEventListener('click',addProject);
-  $('btnEditProj').addEventListener('click',editProject);
-  $('btnDelProj').addEventListener('click',delProject);
   $('btnAddPerson').addEventListener('click',()=>openPerson());
   $('appName').addEventListener('click',renameApp);
   $('appLogo').addEventListener('click',()=>$('logoInput').click());

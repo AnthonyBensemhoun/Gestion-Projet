@@ -58,13 +58,14 @@
     <div class="projbar">
       <label>Projet</label>
       <select id="projSelect"></select>
-      {% if is_admin %}
+      {% if can_manage_projects %}
       <button class="btn sm" id="btnAddProj">+ Nouveau</button>
       <button class="btn sm ghost" id="btnEditProj">Renommer</button>
       <button class="btn sm ghost" id="btnDelProj">Supprimer</button>
       {% endif %}
       <button class="btn sm ghost" id="btnImportGantt" title="Importer un planning / Gantt (PDF) et créer les tâches">📥 Importer un planning</button>
       <input type="file" id="ganttInput" accept=".pdf,.docx,.txt,.md,.csv" class="hidden">
+      <span id="projMeta" class="proj-meta"></span>
     </div>
     <div class="topbar-actions">
       <button class="btn ghost sm" id="btnGlobalSearch" title="Rechercher (Ctrl+K)">🔍 <span class="hide-sm">Rechercher</span> <kbd class="hide-sm">⌘K</kbd></button>
@@ -270,7 +271,7 @@
   <div class="field"><label>Email</label><input id="f_email" placeholder="prenom.nom@alivedx.com"></div>
   <div class="field" id="passwordField"><label>Mot de passe (laisser vide pour générer automatiquement)</label><input id="f_password" type="text"></div>
   <div class="field"><label>Rôle dans l'application</label>
-    <select id="f_role"><option value="user">Utilisateur (modifie ses tâches uniquement)</option><option value="admin">Administrateur (accès total)</option></select>
+    <select id="f_role"><option value="user">Utilisateur (modifie ses tâches uniquement)</option><option value="lead">Team Leader (gère les projets)</option><option value="admin">Administrateur (accès total)</option></select>
   </div>
   <div class="row" style="justify-content:flex-end;margin-top:8px">
     <button class="btn ghost" data-close="personModal">Annuler</button>
@@ -303,6 +304,7 @@
 window.CURRENT_USER = {
   id: {{ user.id }}, name: {{ user.name|tojson }}, role: {{ user.role|tojson }},
   is_admin: {{ 'true' if is_admin else 'false' }},
+  can_manage_projects: {{ 'true' if can_manage_projects else 'false' }},
   must_change_password: {{ 'true' if must_change_password else 'false' }}
 };
 </script>
@@ -401,6 +403,8 @@ window.CURRENT_USER = {
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.5/dist/docx-preview.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>if(window.pdfjsLib)pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <script src="/static/app.js"></script>
 </body>
 </html>

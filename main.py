@@ -55,6 +55,8 @@ class Project(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
     description: str = ""
+    created_by: Optional[int] = Field(default=None)   # créateur
+    lead_id: Optional[int] = Field(default=None)      # chef de projet (responsable)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class Task(SQLModel, table=True):
@@ -159,6 +161,8 @@ class DocComment(SQLModel, table=True):
     document_id: int = Field(index=True)
     user_id: Optional[int] = Field(default=None)
     text: str = ""
+    anchor_x: Optional[float] = Field(default=None)  # position X (%) dans le document
+    anchor_y: Optional[float] = Field(default=None)  # position Y (%) dans le document
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class DocDistribution(SQLModel, table=True):
@@ -274,6 +278,12 @@ def require_admin(request: Request, s: Session = Depends(get_session)) -> User:
         raise HTTPException(403, "Accès réservé aux administrateurs")
     return u
 
+def require_project_manager(request: Request, s: Session = Depends(get_session)) -> User:
+    u = require_user(request, s)
+    if u.role not in ("admin", "lead"):
+        raise HTTPException(403, "Réservé aux chefs de projet (Team Leader) et administrateurs")
+    return u
+
 # ---------------- App ----------------
 app = FastAPI(title="Atelier")
 templates = Jinja2Templates(directory="templates")
@@ -308,6 +318,14 @@ def on_startup():
              "ALTER TABLE document ADD COLUMN phase_since TIMESTAMP"),
             ('ALTER TABLE document ADD COLUMN IF NOT EXISTS obsolete BOOLEAN DEFAULT FALSE NOT NULL',
              "ALTER TABLE document ADD COLUMN obsolete BOOLEAN DEFAULT 0 NOT NULL"),
+            ('ALTER TABLE doccomment ADD COLUMN IF NOT EXISTS anchor_x FLOAT',
+             "ALTER TABLE doccomment ADD COLUMN anchor_x FLOAT"),
+            ('ALTER TABLE doccomment ADD COLUMN IF NOT EXISTS anchor_y FLOAT',
+             "ALTER TABLE doccomment ADD COLUMN anchor_y FLOAT"),
+            ('ALTER TABLE project ADD COLUMN IF NOT EXISTS created_by INTEGER',
+             "ALTER TABLE project ADD COLUMN created_by INTEGER"),
+            ('ALTER TABLE project ADD COLUMN IF NOT EXISTS lead_id INTEGER',
+             "ALTER TABLE project ADD COLUMN lead_id INTEGER"),
         ]
         for pg_stmt, sq_stmt in migrations:
             try:
@@ -343,6 +361,7 @@ def home(request: Request, s: Session = Depends(get_session)):
         "app_name": _setting(s, "app_name", "Helix"),
         "app_logo": _setting(s, "app_logo", ""),
         "is_admin": u.role == "admin",
+        "can_manage_projects": u.role in ("admin", "lead"),
         "must_change_password": u.must_change_password
     })
 
@@ -384,7 +403,9 @@ def logout(request: Request, s: Session = Depends(get_session)):
 # ---------------- API : Users / Team ----------------
 @app.get("/api/me")
 def api_me(u: User = Depends(require_user)):
-    return {"id": u.id, "name": u.name, "email": u.email, "role": u.role, "must_change_password": u.must_change_password}
+    return {"id": u.id, "name": u.name, "email": u.email, "role": u.role,
+            "can_manage_projects": u.role in ("admin", "lead"),
+            "must_change_password": u.must_change_password}
 
 @app.get("/api/users")
 def list_users(u: User = Depends(require_user), s: Session = Depends(get_session)):
@@ -403,8 +424,10 @@ def create_user(data: dict, u: User = Depends(require_admin), s: Session = Depen
         raise HTTPException(400, "Nom et email requis")
     if s.exec(select(User).where(User.email == email)).first():
         raise HTTPException(400, "Cet email existe déjà")
+    role = data.get("role", "user")
+    if role not in ("admin", "lead", "user"): role = "user"
     new = User(email=email, name=name, password_hash=bcrypt.hash(password),
-               role=data.get("role", "user"), must_change_password=True)
+               role=role, must_change_password=True)
     s.add(new)
     _audit(s, u.name, "Création utilisateur", f"{name} ({email})")
     s.commit(); s.refresh(new)
@@ -426,7 +449,7 @@ def update_user(uid: int, data: dict, u: User = Depends(require_admin), s: Sessi
             if conflict:
                 raise HTTPException(400, "Cet email est déjà utilisé par un autre compte")
         updates["email"] = new_email
-    if "role" in data and data["role"] in ("admin", "user"):
+    if "role" in data and data["role"] in ("admin", "lead", "user"):
         updates["role"] = data["role"]
     if data.get("password"):
         updates["password_hash"] = bcrypt.hash(data["password"])
@@ -466,31 +489,43 @@ def change_my_password(data: dict, u: User = Depends(require_user), s: Session =
 # ---------------- API : Projects ----------------
 @app.get("/api/projects")
 def list_projects(u: User = Depends(require_user), s: Session = Depends(get_session)):
-    return [{"id": p.id, "name": p.name, "description": p.description}
+    names = {x.id: x.name for x in s.exec(select(User)).all()}
+    return [{"id": p.id, "name": p.name, "description": p.description,
+             "created_by": p.created_by, "created_by_name": names.get(p.created_by),
+             "lead_id": p.lead_id, "lead_name": names.get(p.lead_id),
+             "created_at": p.created_at.isoformat() if p.created_at else None}
             for p in s.exec(select(Project).order_by(Project.name)).all()]
 
 @app.post("/api/projects")
-def create_project(data: dict, u: User = Depends(require_admin), s: Session = Depends(get_session)):
+def create_project(data: dict, u: User = Depends(require_project_manager), s: Session = Depends(get_session)):
     name = data.get("name", "").strip()
     if not name: raise HTTPException(400, "Nom requis")
-    p = Project(name=name, description=data.get("description", "").strip())
+    lead_id = data.get("lead_id")
+    if lead_id and not s.get(User, lead_id): lead_id = None
+    p = Project(name=name, description=data.get("description", "").strip(),
+                created_by=u.id, lead_id=lead_id or u.id)
     s.add(p)
     _audit(s, u.name, "Création projet", name)
     s.commit(); s.refresh(p)
-    return {"id": p.id, "name": p.name, "description": p.description}
+    return {"id": p.id, "name": p.name, "description": p.description,
+            "lead_id": p.lead_id, "lead_name": _user_name(s, p.lead_id),
+            "created_by_name": u.name}
 
 @app.put("/api/projects/{pid}")
-def update_project(pid: int, data: dict, u: User = Depends(require_admin), s: Session = Depends(get_session)):
+def update_project(pid: int, data: dict, u: User = Depends(require_project_manager), s: Session = Depends(get_session)):
     p = s.get(Project, pid)
     if not p: raise HTTPException(404)
     if "name" in data: p.name = data["name"].strip()
     if "description" in data: p.description = data["description"].strip()
+    if "lead_id" in data:
+        lid = data.get("lead_id")
+        p.lead_id = lid if (lid and s.get(User, lid)) else None
     _audit(s, u.name, "Modification projet", p.name)
     s.add(p); s.commit()
     return {"ok": True}
 
 @app.delete("/api/projects/{pid}")
-def delete_project(pid: int, u: User = Depends(require_admin), s: Session = Depends(get_session)):
+def delete_project(pid: int, u: User = Depends(require_project_manager), s: Session = Depends(get_session)):
     p = s.get(Project, pid)
     if p:
         _audit(s, u.name, "Suppression projet", p.name)
@@ -1450,7 +1485,8 @@ def list_doc_comments(doc_id: int, u: User = Depends(require_user), s: Session =
     rows = s.exec(select(DocComment).where(DocComment.document_id == doc_id)
                  .order_by(DocComment.created_at)).all()
     return [{"id": c.id, "user_id": c.user_id, "author": users.get(c.user_id, "?"),
-             "text": c.text, "created_at": c.created_at.isoformat()} for c in rows]
+             "text": c.text, "anchor_x": c.anchor_x, "anchor_y": c.anchor_y,
+             "created_at": c.created_at.isoformat()} for c in rows]
 
 @app.post("/api/documents/{doc_id}/comments")
 def create_doc_comment(doc_id: int, data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
@@ -1458,7 +1494,10 @@ def create_doc_comment(doc_id: int, data: dict, u: User = Depends(require_user),
     if not d: raise HTTPException(404, "Document introuvable")
     text = (data.get("text") or "").strip()
     if not text: raise HTTPException(400, "Texte requis")
-    c = DocComment(document_id=doc_id, user_id=u.id, text=text)
+    ax, ay = data.get("anchor_x"), data.get("anchor_y")
+    c = DocComment(document_id=doc_id, user_id=u.id, text=text,
+                   anchor_x=ax if isinstance(ax, (int, float)) else None,
+                   anchor_y=ay if isinstance(ay, (int, float)) else None)
     s.add(c)
     notified = set()
     for mid in (data.get("mentions") or []):
@@ -1471,7 +1510,20 @@ def create_doc_comment(doc_id: int, data: dict, u: User = Depends(require_user),
                     doc_id=doc_id, actor_id=u.id)
             notified.add(mid)
     s.commit(); s.refresh(c)
-    return {"id": c.id, "author": u.name, "text": c.text, "created_at": c.created_at.isoformat()}
+    return {"id": c.id, "author": u.name, "text": c.text,
+            "anchor_x": c.anchor_x, "anchor_y": c.anchor_y,
+            "created_at": c.created_at.isoformat()}
+
+@app.put("/api/doc-comments/{cid}/anchor")
+def move_doc_comment(cid: int, data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    c = s.get(DocComment, cid)
+    if not c: raise HTTPException(404)
+    ax, ay = data.get("anchor_x"), data.get("anchor_y")
+    s.execute(sa_update(DocComment).where(DocComment.id == cid).values(
+        anchor_x=ax if isinstance(ax, (int, float)) else None,
+        anchor_y=ay if isinstance(ay, (int, float)) else None))
+    s.commit()
+    return {"ok": True}
 
 @app.delete("/api/doc-comments/{cid}")
 def delete_doc_comment(cid: int, u: User = Depends(require_user), s: Session = Depends(get_session)):

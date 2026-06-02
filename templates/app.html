@@ -22,6 +22,7 @@
   <nav class="side-nav">
     <div class="side-group">Pilotage</div>
     <a class="tab active" data-tab="me"><span class="ic">🏠</span><span class="lb">Mon espace</span></a>
+    <a class="tab" data-tab="portfolio"><span class="ic">🗂️</span><span class="lb">Portefeuille</span></a>
     <a class="tab" data-tab="dash"><span class="ic">📊</span><span class="lb">Tableau de bord</span></a>
     <a class="tab" data-tab="kpi"><span class="ic">🎯</span><span class="lb">KPI Service</span></a>
     <a class="tab" data-tab="synth"><span class="ic">📈</span><span class="lb">Synthèse projet</span></a>
@@ -73,6 +74,8 @@
       <button class="btn ghost sm" id="btnGlobalSearch" title="Rechercher (Ctrl+K)">🔍 <span class="hide-sm">Rechercher</span> <kbd class="hide-sm">⌘K</kbd></button>
       <button class="btn ghost sm" id="btnImportDoc">📄 <span class="hide-sm">Importer</span></button>
       <input type="file" id="docInput" accept=".pdf,.docx,.txt,.md" class="hidden">
+      <button class="icon-btn" id="btnActivity" title="Activité récente">🕑</button>
+      <div class="notif-dropdown hidden" id="activityDropdown"></div>
       <button class="icon-btn" id="btnNotif" title="Notifications">🔔<span id="notifCount" class="badge hidden">0</span></button>
       <div class="notif-dropdown hidden" id="notifDropdown"></div>
     </div>
@@ -87,6 +90,14 @@
 <main>
   <section id="sec-me">
     <div id="meContent"></div>
+  </section>
+
+  <section id="sec-portfolio" class="hidden">
+    <div class="sec-h">
+      <h2>🗂️ Portefeuille de projets</h2>
+      <span class="meta" style="font-size:12px">Vue d'ensemble de tous les projets</span>
+    </div>
+    <div id="portfolioContent"></div>
   </section>
 
   <section id="sec-kpi" class="hidden">
@@ -205,6 +216,7 @@
       <h2>📄 Documents qualité</h2>
       <button class="btn primary" id="btnAddDoc">+ Ajouter un document</button>
     </div>
+    <div id="qmsBand" class="qms-band"></div>
     <div class="meta" style="margin-bottom:14px;font-size:13px">
       Verrouille un document pour l'éditer, télécharge-le, modifie-le dans Word, puis ré-uploade une nouvelle version. L'historique complet est conservé.
     </div>
@@ -310,9 +322,28 @@ window.CURRENT_USER = {
   must_change_password: {{ 'true' if must_change_password else 'false' }}
 };
 </script>
-<div class="modal-bg" id="searchModal"><div class="modal" style="width:min(600px,100%)">
-  <div class="search-bar"><span>🔍</span><input id="searchInput" type="text" placeholder="Rechercher tâche, projet… (Esc pour fermer)" autocomplete="off"></div>
+<div class="modal-bg" id="searchModal"><div class="modal" style="width:min(640px,100%)">
+  <div class="search-bar"><span>🔍</span><input id="searchInput" type="text" placeholder="Rechercher un projet, une tâche, un document, une personne…" autocomplete="off"></div>
   <div id="searchResults"></div>
+  <div class="search-foot"><kbd>↑</kbd><kbd>↓</kbd> naviguer · <kbd>↵</kbd> ouvrir · <kbd>Esc</kbd> fermer</div>
+</div></div>
+
+<div class="modal-bg" id="shortcutsModal"><div class="modal" style="width:min(520px,100%)">
+  <div class="sec-h"><h2>⌨️ Raccourcis clavier</h2><button class="x" data-close="shortcutsModal">✕</button></div>
+  <div class="shortcut-list">
+    <div class="shortcut-row"><span>Recherche globale</span><span><kbd>Ctrl</kbd>+<kbd>K</kbd> ou <kbd>/</kbd></span></div>
+    <div class="shortcut-row"><span>Cette aide</span><span><kbd>?</kbd></span></div>
+    <div class="shortcut-row"><span>Nouvelle tâche</span><span><kbd>n</kbd></span></div>
+    <div class="shortcut-row"><span>Activité récente</span><span><kbd>a</kbd></span></div>
+    <div class="shortcut-row" style="opacity:.7;font-weight:700;border:none;padding-bottom:2px"><span>Naviguer (g puis…)</span><span></span></div>
+    <div class="shortcut-row"><span>Mon espace</span><span><kbd>g</kbd> <kbd>h</kbd></span></div>
+    <div class="shortcut-row"><span>Portefeuille</span><span><kbd>g</kbd> <kbd>p</kbd></span></div>
+    <div class="shortcut-row"><span>Tableau de bord</span><span><kbd>g</kbd> <kbd>d</kbd></span></div>
+    <div class="shortcut-row"><span>Tâches</span><span><kbd>g</kbd> <kbd>t</kbd></span></div>
+    <div class="shortcut-row"><span>Kanban</span><span><kbd>g</kbd> <kbd>k</kbd></span></div>
+    <div class="shortcut-row"><span>Calendrier</span><span><kbd>g</kbd> <kbd>c</kbd></span></div>
+    <div class="shortcut-row"><span>Documents</span><span><kbd>g</kbd> <kbd>q</kbd></span></div>
+  </div>
 </div></div>
 
 <div class="modal-bg" id="inviteModal"><div class="modal">

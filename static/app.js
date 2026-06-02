@@ -262,6 +262,7 @@ function renderSynth(){
   html+=`<div class="panel"><div class="l" style="color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:1px">État des tâches</div><div style="margin-top:8px;font-size:13px;line-height:1.7">✅ Terminées : <strong>${pp.done}</strong><br>🔵 En cours : <strong>${pp.prog}</strong><br>⚪ À faire : <strong>${pp.todo}</strong><br>🔴 En retard : <strong>${pp.late}</strong></div></div>`;
   html+='</div>';
   if(proj.description)html+=`<div class="panel" style="margin-bottom:18px"><strong>Description</strong><div class="meta" style="margin-top:6px">${esc(proj.description)}</div></div>`;
+  html+=`<div class="panel" style="margin-bottom:18px"><div class="sec-h"><h2 style="font-size:18px">📉 Avancement planifié vs réel</h2><span class="meta" style="font-size:11px">Courbe d'avancement (burn-up)</span></div><div style="height:240px;position:relative"><canvas id="burndownChart"></canvas></div><div class="meta" style="font-size:11px;margin-top:8px">La courbe « planifié » suppose chaque tâche terminée à son échéance. Le point « réel » est l'avancement pondéré actuel.</div></div>`;
   html+=`<div class="panel" style="margin-bottom:18px"><div class="sec-h"><h2 style="font-size:18px">Diagramme de Gantt</h2></div>${buildGantt(ts)}</div>`;
   html+='<div class="panel"><div class="sec-h"><h2 style="font-size:18px">Détail des tâches</h2></div><div style="overflow:auto"><table><thead><tr><th>Tâche</th><th>Responsable</th><th>Priorité</th><th>Début</th><th>Échéance</th><th>Statut</th><th>%</th></tr></thead><tbody>';
   if(!ts.length)html+='<tr><td colspan="7" class="empty">Aucune tâche.</td></tr>';
@@ -269,6 +270,45 @@ function renderSynth(){
     html+=`<tr><td>${esc(t.title)}</td><td>${esc(userName(t.assignee_id))}</td><td>${PRIO_LABEL[t.priority]}</td><td>${fmtDate(t.start_date)}</td><td${late?' style="color:var(--bad);font-weight:700"':''}>${fmtDate(t.due_date)}</td><td>${late?'En retard':STATUS_LABEL[t.status]}</td><td>${t.progress||0}%</td></tr>`;});
   html+='</tbody></table></div></div>';
   c.innerHTML=html;
+  drawBurndown();
+}
+let chartBurndown=null;
+function drawBurndown(){
+  const cv=$('burndownChart');
+  if(!cv||typeof Chart==='undefined')return;
+  const ts=projTasks();
+  const dated=ts.filter(t=>t.due_date);
+  if(chartBurndown){chartBurndown.destroy();chartBurndown=null;}
+  if(!dated.length){const cx=cv.getContext('2d');cx.clearRect(0,0,cv.width,cv.height);cx.fillStyle='#94a3b8';cx.font='13px Inter,sans-serif';cx.fillText('Ajoute des échéances aux tâches pour afficher la courbe.',12,28);return;}
+  const totalW=ts.reduce((a,t)=>a+(PRIO_WEIGHT[t.priority]||2),0)||1;
+  // bornes temporelles
+  let min=dated[0].due_date,max=dated[0].due_date;
+  ts.forEach(t=>{if(t.start_date&&t.start_date<min)min=t.start_date;if(t.due_date){if(t.due_date<min)min=t.due_date;if(t.due_date>max)max=t.due_date;}});
+  const tdy=today();if(tdy<min)min=tdy;if(tdy>max)max=tdy;
+  const d0=new Date(min),d1=new Date(max);
+  const span=Math.max(1,Math.round((d1-d0)/864e5));
+  const step=Math.max(1,Math.round(span/14)); // ~14 points
+  const labels=[],planned=[],real=[];
+  for(let i=0;i<=span;i+=step){
+    const d=new Date(d0.getTime()+i*864e5);const ds=d.toISOString().slice(0,10);
+    labels.push(d.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit'}));
+    // planifié : % du poids dont l'échéance est passée à cette date
+    const doneW=ts.reduce((a,t)=>a+((t.due_date&&t.due_date<=ds)?(PRIO_WEIGHT[t.priority]||2):0),0);
+    planned.push(Math.round(doneW/totalW*100));
+    // réel : avancement pondéré réel uniquement jusqu'à aujourd'hui
+    if(ds<=tdy){const rW=ts.reduce((a,t)=>a+(PRIO_WEIGHT[t.priority]||2)*((t.progress||0)/100),0);real.push(Math.round(rW/totalW*100));}
+    else real.push(null);
+  }
+  chartBurndown=new Chart(cv.getContext('2d'),{
+    type:'line',
+    data:{labels,datasets:[
+      {label:'Planifié',data:planned,borderColor:'#94a3b8',borderDash:[6,5],pointRadius:0,tension:.15,fill:false},
+      {label:'Réel',data:real,borderColor:'#4f46e5',backgroundColor:'rgba(79,70,229,.12)',pointRadius:3,tension:.2,fill:true,spanGaps:false},
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{labels:{boxWidth:12,font:{size:12}}}},
+      scales:{y:{min:0,max:100,ticks:{callback:v=>v+'%',font:{size:11}}},x:{ticks:{font:{size:10},maxRotation:0,autoSkip:true}}}}
+  });
 }
 function buildGantt(ts){
   const dated=ts.filter(t=>t.start_date && t.due_date);
@@ -291,6 +331,58 @@ function buildGantt(ts){
     rows+=`<div class="gantt-row"><div class="gantt-label" title="${esc(t.title)}">${esc(t.title)}</div><div class="gantt-track"><div class="gantt-bar ${cls}" style="left:${off}%;width:${w}%" title="${fmtDate(t.start_date)} → ${fmtDate(t.due_date)}">${t.progress||0}%</div></div></div>`;
   });
   return `<div class="gantt">${head}${rows}</div>`;
+}
+
+/* ====== Portefeuille multi-projets ====== */
+async function renderPortfolio(){
+  const c=$('portfolioContent');if(!c)return;
+  c.innerHTML='<div class="empty">Chargement…</div>';
+  let tasks=[],docs=[];
+  try{[tasks,docs]=await Promise.all([api('/api/tasks'),api('/api/documents')]);}
+  catch(e){c.innerHTML='<div class="empty">Erreur : '+esc(e.message)+'</div>';return;}
+  if(!state.projects.length){c.innerHTML='<div class="empty">Aucun projet pour le moment.</div>';return;}
+  let nbDiff=0;const allLate=tasks.filter(isLate).length;
+  let gW=0,gWd=0;
+  const cards=state.projects.map(p=>{
+    const pts=tasks.filter(t=>t.project_id==p.id);
+    const totalW=pts.reduce((a,t)=>a+(PRIO_WEIGHT[t.priority]||2),0)||1;
+    const wdone=pts.reduce((a,t)=>a+(PRIO_WEIGHT[t.priority]||2)*((t.progress||0)/100),0);
+    gW+=pts.reduce((a,t)=>a+(PRIO_WEIGHT[t.priority]||2),0);gWd+=wdone;
+    const pct=pts.length?Math.round(wdone/totalW*100):0;
+    const late=pts.filter(isLate).length;
+    const soon=pts.filter(t=>t.status!=='done'&&t.due_date&&daysBetween(today(),t.due_date)>=0&&daysBetween(today(),t.due_date)<=3).length;
+    const done=pts.filter(t=>t.status==='done').length;
+    const health=late>0?{ic:'🔴',color:'var(--bad)'}:soon>0?{ic:'🟠',color:'var(--warn)'}:{ic:'🟢',color:'var(--ok)'};
+    if(late>0)nbDiff++;
+    const docN=docs.filter(d=>d.project_id==p.id).length;
+    const upcoming=pts.filter(t=>t.status!=='done'&&t.due_date).sort((a,b)=>a.due_date.localeCompare(b.due_date))[0];
+    return `<div class="pf-card" data-pf-proj="${p.id}">
+      <div class="pf-head"><div class="pf-name">${esc(p.name)}</div><span class="pf-health" style="color:${health.color}">${health.ic}</span></div>
+      <div class="pf-lead">${p.lead_name?('👤 '+esc(p.lead_name)):'<span style="color:var(--mut)">Sans chef de projet</span>'}</div>
+      <div class="pf-bar"><i style="width:${pct}%"></i></div>
+      <div class="pf-pct">${pct}% <span class="pf-pct-lbl">avancement</span></div>
+      <div class="pf-stats">
+        <span title="Tâches">✓ ${pts.length}</span>
+        <span title="Terminées">✅ ${done}</span>
+        <span class="${late?'pf-late':''}" title="En retard">⏰ ${late}</span>
+        <span title="Documents">📄 ${docN}</span>
+      </div>
+      <div class="pf-next">${upcoming?('🗓 Prochaine échéance : <strong>'+fmtDate(upcoming.due_date)+'</strong>'):'<span style="color:var(--mut)">Aucune échéance</span>'}</div>
+    </div>`;
+  }).join('');
+  const gPct=gW?Math.round(gWd/gW*100):0;
+  const summary=`<div class="pf-summary">
+    <div class="pf-kpi"><div class="pf-kpi-n">${state.projects.length}</div><div class="pf-kpi-l">Projets</div></div>
+    <div class="pf-kpi"><div class="pf-kpi-n">${gPct}%</div><div class="pf-kpi-l">Avancement global</div></div>
+    <div class="pf-kpi ${allLate?'bad':''}"><div class="pf-kpi-n">${allLate}</div><div class="pf-kpi-l">Tâches en retard</div></div>
+    <div class="pf-kpi ${nbDiff?'bad':''}"><div class="pf-kpi-n">${nbDiff}</div><div class="pf-kpi-l">Projets en difficulté</div></div>
+  </div>`;
+  c.innerHTML=summary+`<div class="pf-grid">${cards}</div>`;
+  c.querySelectorAll('[data-pf-proj]').forEach(el=>el.addEventListener('click',()=>{
+    const pid=parseInt(el.dataset.pfProj,10);
+    $('projSelect').value=pid;$('projSelect').dispatchEvent(new Event('change'));
+    tab('synth');
+  }));
 }
 
 /* ====== Calendrier ====== */
@@ -526,7 +618,7 @@ async function remindTask(taskId){
 /* ====== Navigation ====== */
 function tab(name){
   document.querySelectorAll('nav .tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));
-  ['me','dash','kpi','synth','tasks','team','absence','alerts','kanban','cal','list','docs','capacity','audit'].forEach(s=>{
+  ['me','portfolio','dash','kpi','synth','tasks','team','absence','alerts','kanban','cal','list','docs','capacity','audit'].forEach(s=>{
     const el=$('sec-'+s);
     if(!el) return;
     if(s===name){
@@ -541,6 +633,8 @@ function tab(name){
   if(name==='docs') renderDocs();
   if(name==='kpi') renderKPI();
   if(name==='me') renderMe();
+  if(name==='portfolio') renderPortfolio();
+  if(name==='synth') drawBurndown();
 }
 function openModal(id){fillSelects();$(id).classList.add('show');}
 function closeModal(id){$(id).classList.remove('show');}
@@ -982,6 +1076,8 @@ async function toggleNotifDropdown(){
 document.addEventListener('click',e=>{
   if(!e.target.closest('#btnNotif') && !e.target.closest('#notifDropdown'))
     $('notifDropdown')?.classList.add('hidden');
+  if(!e.target.closest('#btnActivity') && !e.target.closest('#activityDropdown'))
+    $('activityDropdown')?.classList.add('hidden');
 },{capture:true});
 
 /* ====== Modèle de charge intelligent (D2) ======
@@ -1632,6 +1728,26 @@ function fmtDateTime(iso){
   return parseTs(iso).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});
 }
 
+function renderQMS(docs){
+  const band=$('qmsBand');if(!band)return;
+  const active=docs.filter(d=>!d.obsolete);
+  const slaOver=active.filter(d=>d.sla_over).length;
+  const pendingSign=active.filter(d=>DOC_SIGN_PHASES.includes(d.phase)).length;
+  // « lu & compris » dus pour moi (je suis dans la liste de diffusion mais pas encore acquitté)
+  const myAckDue=active.filter(d=>d.my_required && !d.my_ack).length;
+  // diffusions incomplètes (au moins un lecteur requis n'a pas acquitté)
+  const distIncomplete=active.filter(d=>d.dist_count>0 && d.dist_acked<d.dist_count).length;
+  const obsolete=docs.filter(d=>d.obsolete).length;
+  const cards=[
+    {n:slaOver,    l:'Hors délai SLA',        ic:'⏳', bad:slaOver>0,   phase:'__sla'},
+    {n:pendingSign,l:'Signatures attendues',  ic:'✒️', bad:false,        phase:'__sign'},
+    {n:myAckDue,   l:'Mes « lu & compris »',  ic:'📖', bad:myAckDue>0,  phase:'__myack'},
+    {n:distIncomplete,l:'Diffusions en cours',ic:'📤', bad:false,        phase:'__dist'},
+    {n:obsolete,   l:'Obsolètes',             ic:'🗑️', bad:false,        phase:'__obs'},
+  ];
+  band.innerHTML=cards.map(c=>`<div class="qms-card${c.bad?' bad':''}"><div class="qms-ic">${c.ic}</div><div class="qms-n">${c.n}</div><div class="qms-l">${c.l}</div></div>`).join('');
+}
+
 async function renderDocs(){
   const el=$('docsList');if(!el)return;
   el.className='';  // on n'utilise pas la grille ici, mais un pipeline horizontal
@@ -1640,6 +1756,7 @@ async function renderDocs(){
   try{docs=await api('/api/documents');}
   catch(e){el.innerHTML='<div class="empty">Erreur : '+esc(e.message)+'</div>';return;}
   state.documents=docs;
+  renderQMS(docs);
 
   // Barre d'outils : filtre projet + bascule de vue (Répertoires / Workflow)
   const projOpts=['<option value="">Tous les documents</option>',
@@ -2448,38 +2565,84 @@ function exportCSV(){
 }
 
 /* ====== Recherche (Ctrl+K) ====== */
+let _searchSel=-1;
 function openSearch(){
   $('searchModal').classList.add('show');
   $('searchInput').value='';
+  _searchSel=-1;
   $('searchResults').innerHTML='<div class="search-empty">Commence à taper…</div>';
   setTimeout(()=>$('searchInput').focus(),50);
 }
+function _searchItems(){return Array.from($('searchResults').querySelectorAll('.search-item'));}
+function _searchMove(d){
+  const items=_searchItems();if(!items.length)return;
+  _searchSel=_searchSel<0?(d>0?0:items.length-1):(_searchSel+d+items.length)%items.length;
+  items.forEach((el,i)=>el.classList.toggle('sel',i===_searchSel));
+  items[_searchSel].scrollIntoView({block:'nearest'});
+}
+function _searchActivate(){const items=_searchItems();if(items.length)(items[_searchSel]||items[0]).click();}
+function _searchGo(el){
+  closeModal('searchModal');
+  if(el.dataset.sProj){const pid=parseInt(el.dataset.sProj,10);$('projSelect').value=pid;$('projSelect').dispatchEvent(new Event('change'));tab('synth');}
+  else if(el.dataset.sTask){openTask(el.dataset.sTask);}
+  else if(el.dataset.sDoc){tab('docs');openDocViewer(el.dataset.sDoc);}
+  else if(el.dataset.sPerson){tab('team');}
+}
 async function doSearch(q){
+  _searchSel=-1;
   if(!q||q.length<2){$('searchResults').innerHTML='<div class="search-empty">Commence à taper…</div>';return;}
   try{
     const r=await api('/api/search?q='+encodeURIComponent(q));
     let html='';
     if(r.projects.length){
       html+=`<div class="search-group"><div class="search-group-label">Projets</div>`;
-      html+=r.projects.map(p=>`<div class="search-item" data-search-proj="${p.id}"><span class="search-item-icon">📁</span>${esc(p.name)}</div>`).join('');
+      html+=r.projects.map(p=>`<div class="search-item" data-s-proj="${p.id}"><span class="search-item-icon">📁</span>${esc(p.name)}</div>`).join('');
       html+='</div>';
     }
     if(r.tasks.length){
       html+=`<div class="search-group"><div class="search-group-label">Tâches</div>`;
-      html+=r.tasks.map(t=>`<div class="search-item" data-edit-task="${t.id}"><span class="search-item-icon">${t.status==='done'?'✅':'📌'}</span><div><div>${esc(t.title)}</div><div style="font-size:11px;color:var(--mut)">${esc(projById(t.project_id)?.name||'')}</div></div></div>`).join('');
+      html+=r.tasks.map(t=>`<div class="search-item" data-s-task="${t.id}"><span class="search-item-icon">${t.status==='done'?'✅':'📌'}</span><div><div>${esc(t.title)}</div><div style="font-size:11px;color:var(--mut)">${esc(projById(t.project_id)?.name||'')}</div></div></div>`).join('');
+      html+='</div>';
+    }
+    if((r.documents||[]).length){
+      html+=`<div class="search-group"><div class="search-group-label">Documents</div>`;
+      html+=r.documents.map(d=>{const ph=DOC_PHASE_BY_KEY[d.phase];return `<div class="search-item" data-s-doc="${d.id}"><span class="search-item-icon">📄</span><div><div>${esc(d.name)}${d.obsolete?' <span class="obs-tag">obsolète</span>':''}</div><div style="font-size:11px;color:var(--mut)">${DOC_TYPES[d.doc_type]||d.doc_type}${ph?' · '+ph.label:''}</div></div></div>`;}).join('');
+      html+='</div>';
+    }
+    if((r.people||[]).length){
+      html+=`<div class="search-group"><div class="search-group-label">Personnes</div>`;
+      html+=r.people.map(p=>`<div class="search-item" data-s-person="${p.id}"><span class="search-item-icon ava-mini" style="background:${avaColor(p.id)}">${esc(initials(p.name))}</span><div><div>${esc(p.name)}</div><div style="font-size:11px;color:var(--mut)">${esc(p.email||'')}</div></div></div>`).join('');
       html+='</div>';
     }
     if(!html)html='<div class="search-empty">Aucun résultat</div>';
     $('searchResults').innerHTML=html;
-    $('searchResults').querySelectorAll('[data-search-proj]').forEach(el=>el.addEventListener('click',()=>{
-      const pid=parseInt(el.dataset.searchProj,10);
-      $('projSelect').value=pid;$('projSelect').dispatchEvent(new Event('change'));
-      closeModal('searchModal');
-    }));
-    $('searchResults').querySelectorAll('[data-edit-task]').forEach(el=>el.addEventListener('click',()=>{
-      closeModal('searchModal');openTask(el.dataset.editTask);
-    }));
+    _searchItems().forEach(el=>el.addEventListener('click',()=>_searchGo(el)));
+    _searchMove(1); // pré-sélectionne le premier résultat
   }catch(e){$('searchResults').innerHTML=`<div class="search-empty">Erreur : ${esc(e.message)}</div>`;}
+}
+
+/* ====== Fil d'activité récent ====== */
+const ACT_ICONS={'Création projet':'📁','Modification projet':'✏️','Suppression projet':'🗑️','Création tâche':'➕','Modification tâche':'✅','Suppression tâche':'🗑️','Création document':'📄','Nouvelle version document':'📑','Transition document':'➡️','Signature électronique':'✒️','Accusé de lecture':'📖','Liste de diffusion document':'📤','Lien document':'🔗','Verrouillage document':'🔒','Déverrouillage document':'🔓','Modification document':'✏️','Suppression document':'🗑️','Import planning (Gantt)':'📥','Estimation IA':'🤖','Connexion':'🔑'};
+async function toggleActivityDropdown(){
+  const dd=$('activityDropdown');if(!dd)return;
+  const open=dd.classList.contains('hidden');
+  if($('notifDropdown'))$('notifDropdown').classList.add('hidden');
+  if(!open){dd.classList.add('hidden');return;}
+  dd.classList.remove('hidden');
+  dd.innerHTML='<div class="notif-empty">Chargement…</div>';
+  try{
+    const items=await api('/api/activity?limit=40');
+    if(!items.length){dd.innerHTML='<div class="notif-empty">Aucune activité récente.</div>';return;}
+    dd.innerHTML='<div class="notif-head">🕑 Activité récente</div>'+items.map(a=>`
+      <div class="act-item">
+        <span class="act-ic">${ACT_ICONS[a.action]||'•'}</span>
+        <div class="act-body">
+          <div class="act-line"><strong>${esc(a.user_name||'—')}</strong> · ${esc(a.action)}</div>
+          ${a.details?`<div class="act-det">${esc(a.details)}</div>`:''}
+          <div class="act-ago">${fmtAgo(a.created_at)}</div>
+        </div>
+      </div>`).join('');
+  }catch(e){dd.innerHTML=`<div class="notif-empty">Erreur : ${esc(e.message)}</div>`;}
 }
 
 /* ====== Sous-tâches ====== */
@@ -2664,10 +2827,48 @@ if($('f_tagAdd')) $('f_tagAdd').addEventListener('change',async function(){
 
 // Boutons liste
 
-// Recherche Ctrl+K
+// Activité récente (topbar)
+if($('btnActivity')) $('btnActivity').addEventListener('click',toggleActivityDropdown);
+
+// ====== Recherche + raccourcis clavier ======
+function _typingInField(t){return t && (t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT'||t.isContentEditable);}
+let _gPending=false,_gTimer=null;
+const _GO_MAP={h:'me',p:'portfolio',d:'dash',t:'tasks',k:'kanban',c:'cal',q:'docs',e:'team',l:'list'};
 document.addEventListener('keydown',function(e){
-  if((e.ctrlKey||e.metaKey)&&e.key==='k'){e.preventDefault();openSearch();}
-  if(e.key==='Escape' && $('searchModal').classList.contains('show'))closeModal('searchModal');
+  // Ctrl/Cmd+K : recherche (toujours actif)
+  if((e.ctrlKey||e.metaKey)&&(e.key==='k'||e.key==='K')){e.preventDefault();openSearch();return;}
+  // Navigation dans la palette de recherche
+  if($('searchModal').classList.contains('show')){
+    if(e.key==='Escape'){closeModal('searchModal');return;}
+    if(e.key==='ArrowDown'){e.preventDefault();_searchMove(1);return;}
+    if(e.key==='ArrowUp'){e.preventDefault();_searchMove(-1);return;}
+    if(e.key==='Enter'){e.preventDefault();_searchActivate();return;}
+    return;
+  }
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
+  // Pendant la visite guidée : ne pas intercepter (la visite gère ses propres touches)
+  if($('tourPop'))return;
+  // Un autre modal est ouvert : seul Échap agit (le reste reste à la main de l'utilisateur)
+  if(document.querySelector('.modal-bg.show')){
+    if(e.key==='Escape')document.querySelectorAll('.modal-bg.show').forEach(m=>{if(m.id!=='changePwModal')m.classList.remove('show');});
+    return;
+  }
+  // Si l'utilisateur tape dans un champ, on n'intercepte pas (sauf séquence "g" déjà gérée plus bas)
+  if(_typingInField(e.target)){_gPending=false;return;}
+  // Séquence "g" puis lettre → navigation
+  if(_gPending){
+    _gPending=false;clearTimeout(_gTimer);
+    const dest=_GO_MAP[e.key.toLowerCase()];
+    if(dest){e.preventDefault();tab(dest);}
+    return;
+  }
+  if(e.key==='g'){_gPending=true;_gTimer=setTimeout(()=>_gPending=false,1200);return;}
+  // Raccourcis simples
+  if(e.key==='/'){e.preventDefault();openSearch();}
+  else if(e.key==='?'){e.preventDefault();$('shortcutsModal').classList.add('show');}
+  else if(e.key==='n'){e.preventDefault();openTask();}
+  else if(e.key==='a'){e.preventDefault();toggleActivityDropdown();}
+  else if(e.key==='Escape'){document.querySelectorAll('.modal-bg.show').forEach(m=>{if(m.id!=='changePwModal')m.classList.remove('show');});}
 });
 if($('searchInput')) $('searchInput').addEventListener('input',function(){doSearch(this.value.trim());});
 $('searchModal').addEventListener('click',e=>{if(e.target===$('searchModal'))closeModal('searchModal');});

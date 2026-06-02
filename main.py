@@ -737,13 +737,36 @@ def delete_comment(cid: int, u: User = Depends(require_user), s: Session = Depen
 # ---------------- API : Recherche ----------------
 @app.get("/api/search")
 def search_api(q: str = "", u: User = Depends(require_user), s: Session = Depends(get_session)):
-    if not q.strip() or len(q.strip()) < 2: return {"tasks": [], "projects": []}
+    empty = {"tasks": [], "projects": [], "documents": [], "people": []}
+    if not q.strip() or len(q.strip()) < 2: return empty
     ql = q.strip().lower()
     tasks = [task_dict(t) for t in s.exec(select(Task)).all()
-             if ql in t.title.lower() or ql in (t.description or "").lower()][:15]
+             if ql in t.title.lower() or ql in (t.description or "").lower()][:12]
     projects = [{"id": p.id, "name": p.name} for p in s.exec(select(Project)).all()
-                if ql in p.name.lower()][:5]
-    return {"tasks": tasks, "projects": projects}
+                if ql in p.name.lower() or ql in (p.description or "").lower()][:6]
+    documents = [{"id": d.id, "name": d.name, "doc_type": d.doc_type or "DOC",
+                  "phase": d.phase, "project_id": d.project_id, "obsolete": bool(d.obsolete)}
+                 for d in s.exec(select(Document)).all()
+                 if ql in d.name.lower() or ql in (d.description or "").lower() or ql in (d.folder or "").lower()][:12]
+    people = [{"id": p.id, "name": p.name, "email": p.email, "role": p.role}
+              for p in s.exec(select(User)).all()
+              if ql in p.name.lower() or ql in (p.email or "").lower()][:8]
+    return {"tasks": tasks, "projects": projects, "documents": documents, "people": people}
+
+@app.get("/api/activity")
+def get_activity(limit: int = 50, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    """Fil d'activité récent — accessible à tous (les actions sensibles utilisateurs/connexion sont masquées aux non-admins)."""
+    rows = s.exec(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(300)).all()
+    out = []
+    for l in rows:
+        act = l.action or ""
+        if not u.role == "admin":
+            if act == "Connexion" or "utilisateur" in act.lower():
+                continue
+        out.append({"user_name": l.user_name, "action": act,
+                    "details": l.details, "created_at": l.created_at.isoformat()})
+        if len(out) >= limit: break
+    return out
 
 # ---------------- API : Tags ----------------
 @app.get("/api/projects/{pid}/tags")

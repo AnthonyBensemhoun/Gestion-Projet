@@ -1325,6 +1325,12 @@ def get_document(doc_id: int, u: User = Depends(require_user), s: Session = Depe
 def transition_document(doc_id: int, data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
     d = s.get(Document, doc_id)
     if not d: raise HTTPException(404, "Document introuvable")
+    # On ne peut pas faire avancer un document qui se trouve actuellement chez
+    # quelqu'un d'autre de l'équipe — sauf administrateur.
+    if u.role != "admin" and d.assigned_to and d.assigned_to != u.id:
+        holder = _user_name(s, d.assigned_to)
+        raise HTTPException(403, f"Ce document est actuellement chez {holder}. "
+                                 "Seul cette personne (ou un administrateur) peut le faire avancer.")
     phase = data.get("phase")
     if phase not in DOC_PHASES:
         raise HTTPException(400, "Phase invalide")

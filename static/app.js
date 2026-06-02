@@ -1901,10 +1901,19 @@ async function openDocDetail(docId){
   }
 
   // ----- Formulaire de transition (faire avancer) -----
+  // Règle : si le document est actuellement chez quelqu'un d'autre, seul cette
+  // personne (ou un administrateur) peut le faire avancer.
+  const heldByOther = d.assigned_to && d.assigned_to !== ME.id;
+  const canTransition = IS_ADMIN || !heldByOther;
   const nextIdx=Math.min(phaseIdx+1,DOC_PHASES.length-1);
   const phaseOpts=DOC_PHASES.map((ph,i)=>`<option value="${ph.key}"${i===nextIdx?' selected':''}>${ph.ic} ${ph.label}</option>`).join('');
   const assigneeOpts='<option value="">— Personne (optionnel) —</option>'+state.users.map(usr=>`<option value="${usr.id}">${esc(usr.name)}</option>`).join('');
-  const transition=`<div class="panel" style="padding:13px;margin:14px 0;border-left:3px solid var(--acc)">
+  const transition=!canTransition
+   ? `<div class="panel" style="padding:13px;margin:14px 0;border-left:3px solid var(--warn);background:linear-gradient(180deg,rgba(217,119,6,.06),transparent)">
+        <strong style="font-size:14px">🔒 Document chez ${esc(d.assigned_to_name)}</strong>
+        <div class="meta" style="font-size:13px;margin-top:6px">Tu ne peux pas faire avancer ce document tant qu'il se trouve chez ${esc(d.assigned_to_name)}. Seule cette personne — ou un administrateur — peut le transférer à la phase suivante.</div>
+      </div>`
+   : `<div class="panel" style="padding:13px;margin:14px 0;border-left:3px solid var(--acc)">
     <strong style="font-size:14px">➡️ Faire avancer / transférer le document</strong>
     <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:10px">
       <div class="field" style="flex:1;min-width:150px;margin:0"><label style="font-size:11px">Nouvelle phase</label>

@@ -1200,10 +1200,11 @@ async function renderAudit(){
 async function renderMe(){
   const el=$('meContent');if(!el)return;
   el.innerHTML='<div class="empty">Chargement…</div>';
-  let allTasks=[],allDocs=[];
-  try{[allTasks,allDocs]=await Promise.all([api('/api/tasks'),api('/api/documents')]);}
+  let allTasks=[],allDocs=[],prefs={};
+  try{[allTasks,allDocs,prefs]=await Promise.all([api('/api/tasks'),api('/api/documents'),api('/api/me/prefs')]);}
   catch(e){el.innerHTML='<div class="empty">Erreur : '+esc(e.message)+'</div>';return;}
   allTasksCache=allTasks;
+  mePrefs=prefs||{};
 
   const myTasks=allTasks.filter(t=>t.assignee_id===ME.id&&t.status!=='done');
   const myLate=myTasks.filter(isLate);
@@ -1300,8 +1301,14 @@ const ME_QUOTES=['La qualité n’est jamais un accident ; c’est le résultat 
   'Le mieux est l’ami du bien — avance par petites étapes.','La discipline est le pont entre les objectifs et les réalisations.',
   'Fais-le bien du premier coup : c’est le moins cher.'];
 let _meClock=null;
-function getMeWidgets(){try{const v=JSON.parse(localStorage.getItem('helix_me_widgets'));if(Array.isArray(v))return v.filter(k=>ME_WIDGET_DEFS[k]);}catch{}return ['clock','note','quickactions'];}
-function setMeWidgets(arr){localStorage.setItem('helix_me_widgets',JSON.stringify(arr));}
+let mePrefs={};            // préférences perso synchronisées (widgets, note, mémo…)
+let _mePrefsTimer=null;
+function saveMePrefs(){
+  clearTimeout(_mePrefsTimer);
+  _mePrefsTimer=setTimeout(()=>{api('/api/me/prefs',{method:'PUT',body:mePrefs}).catch(()=>{});},600);
+}
+function getMeWidgets(){return Array.isArray(mePrefs.widgets)?mePrefs.widgets.filter(k=>ME_WIDGET_DEFS[k]):['clock','note','quickactions'];}
+function setMeWidgets(arr){mePrefs.widgets=arr;saveMePrefs();}
 function meWidgetsHtml(){
   const active=getMeWidgets();
   const cards=active.map(meWidgetCard).join('');
@@ -1322,7 +1329,7 @@ function meWidgetCard(k){
 }
 function meWidgetBody(k){
   if(k==='clock') return `<div class="mw-clock" id="mwClock">—</div>`;
-  if(k==='note') return `<textarea class="mw-note" id="mwNote" placeholder="Tes notes perso…">${esc(localStorage.getItem('helix_me_note')||'')}</textarea>`;
+  if(k==='note') return `<textarea class="mw-note" id="mwNote" placeholder="Tes notes perso…">${esc(mePrefs.note||'')}</textarea>`;
   if(k==='memo'){const items=meMemoGet();return `<div class="mw-memo-list" id="mwMemoList">${meMemoRows(items)}</div>
     <div class="row" style="gap:5px;margin-top:6px"><input id="mwMemoInput" class="mw-memo-input" placeholder="Ajouter…"><button class="btn sm" id="mwMemoAdd">+</button></div>`;}
   if(k==='quickactions') return `<div class="mw-actions">
@@ -1335,13 +1342,13 @@ function meWidgetBody(k){
       return `<div class="mw-abs-row"><span class="ava" style="width:22px;height:22px;font-size:9px;background:${avaColor(u.id)}">${initials(u.name)}</span><span>${esc(u.name)}</span><span class="meta" style="margin-left:auto;font-size:11px">${a?esc(a.kind):''}</span></div>`;}).join('')
       :'<div class="meta" style="font-size:13px">Personne absente aujourd’hui 🎉</div>';
   }
-  if(k==='countdown'){const tgt=localStorage.getItem('helix_me_countdown')||'';
+  if(k==='countdown'){const tgt=mePrefs.countdown||'';
     return `<input type="date" id="mwCdDate" value="${tgt}" class="mw-cd-date"><div class="mw-cd-out" id="mwCdOut"></div>`;}
   if(k==='quote'){const q=ME_QUOTES[Math.floor(Math.random()*ME_QUOTES.length)];return `<div class="mw-quote">« ${esc(q)} »</div>`;}
   return '';
 }
-function meMemoGet(){try{const v=JSON.parse(localStorage.getItem('helix_me_memo'));if(Array.isArray(v))return v;}catch{}return [];}
-function meMemoSet(v){localStorage.setItem('helix_me_memo',JSON.stringify(v));}
+function meMemoGet(){return Array.isArray(mePrefs.memo)?mePrefs.memo:[];}
+function meMemoSet(v){mePrefs.memo=v;saveMePrefs();}
 function meMemoRows(items){return items.length?items.map((it,i)=>`<label class="mw-memo-item${it.done?' done':''}"><input type="checkbox" data-memo-i="${i}" ${it.done?'checked':''}><span>${esc(it.t)}</span><button class="x" data-memo-del="${i}">✕</button></label>`).join(''):'<div class="meta" style="font-size:12px">Aucune tâche perso.</div>';}
 function wireMeWidgets(){
   // Ajouter / retirer
@@ -1369,7 +1376,7 @@ function wireMeWidgets(){
   }
   // Note
   const note=$('mwNote');
-  if(note) note.addEventListener('input',()=>localStorage.setItem('helix_me_note',note.value));
+  if(note) note.addEventListener('input',()=>{mePrefs.note=note.value;saveMePrefs();});
   // Mémo
   const memoAdd=$('mwMemoAdd'), memoInp=$('mwMemoInput');
   function refreshMemo(){const l=$('mwMemoList');if(l)l.innerHTML=meMemoRows(meMemoGet());wireMemo();}
@@ -1396,7 +1403,7 @@ function wireMeWidgets(){
       out.innerHTML=dd>0?`<div class="mw-cd-num">${dd}</div><div class="meta">jour(s) restant(s)</div>`
         :dd===0?'<div class="mw-cd-num" style="color:var(--warn)">Aujourd’hui !</div>'
         :`<div class="mw-cd-num" style="color:var(--bad)">${Math.abs(dd)}</div><div class="meta">jour(s) de retard</div>`;};
-    cd.addEventListener('change',()=>{localStorage.setItem('helix_me_countdown',cd.value);upd();});
+    cd.addEventListener('change',()=>{mePrefs.countdown=cd.value;saveMePrefs();upd();});
     upd();
   }
 }

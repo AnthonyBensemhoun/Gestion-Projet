@@ -199,6 +199,10 @@ class Notification(SQLModel, table=True):
     read: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+class UserPref(SQLModel, table=True):
+    user_id: int = Field(primary_key=True)
+    data: str = "{}"   # préférences personnelles (widgets, notes, mémo…) en JSON
+
 # ---------------- Helpers ----------------
 def get_session():
     with Session(engine) as s:
@@ -871,6 +875,25 @@ def mark_notifications_read(data: dict = None, u: User = Depends(require_user), 
     else:
         s.execute(sa_update(Notification).where(Notification.user_id == u.id, Notification.read == False).values(read=True))
     s.commit()
+    return {"ok": True}
+
+# ---------------- API : Préférences personnelles (Mon espace) ----------------
+@app.get("/api/me/prefs")
+def get_my_prefs(u: User = Depends(require_user), s: Session = Depends(get_session)):
+    r = s.get(UserPref, u.id)
+    if not r: return {}
+    try: return json.loads(r.data)
+    except Exception: return {}
+
+@app.put("/api/me/prefs")
+def set_my_prefs(data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    payload = json.dumps(data, ensure_ascii=False)[:50000]
+    r = s.get(UserPref, u.id)
+    if r:
+        r.data = payload
+    else:
+        r = UserPref(user_id=u.id, data=payload)
+    s.add(r); s.commit()
     return {"ok": True}
 
 # ---------------- API : Settings (branding) ----------------

@@ -3082,13 +3082,13 @@ const TOUR_STEPS=[
   {sel:'.side-nav .tab[data-tab="docs"]', tab:'docs', pos:'right', title:'📄 Documents qualité', text:"On a aussi ajouté un <strong>document exemple</strong> rangé par répertoire (« Validation »). Regardons-le de près 👇"},
   {sel:'#qmsBand', tab:'docs', pos:'bottom', title:'🩺 Le baromètre QMS', text:"En tête de page, ce bandeau résume la santé qualité : documents <strong>hors délai SLA</strong>, <strong>signatures attendues</strong>, tes <strong>« lu &amp; compris »</strong> à faire, diffusions en cours et documents obsolètes."},
   // ----- Deep-dive Documents (sur le document exemple) -----
-  {run:()=>{ if(_tourDemo.docId) openDocViewer(_tourDemo.docId); }, center:true, title:'📄 Le lecteur de document', text:"Le document s'ouvre dans un <strong>lecteur intégré</strong> : les <strong>PDF</strong> s'affichent tels quels et les fichiers <strong>Word (.docx)</strong> sont convertis en HTML pour la lecture. Le filigrane « COPIE NON CONTRÔLÉE » rappelle que la version officielle reste celle du QMS."},
+  {run:()=>{ const id=_tourDocId(); if(id) openDocViewer(id); }, center:true, title:'📄 Le lecteur de document', text:"Le document s'ouvre dans un <strong>lecteur intégré</strong> : les <strong>PDF</strong> s'affichent tels quels et les fichiers <strong>Word (.docx)</strong> sont convertis en HTML pour la lecture. Le filigrane « COPIE NON CONTRÔLÉE » rappelle que la version officielle reste celle du QMS."},
   {sel:'#dvPreview', pos:'right', title:'👁️ Aperçu', text:"Tu lis le document directement, sans le télécharger. Pour la version exacte mise en forme, le bouton « Télécharger l'original » est toujours là."},
   {sel:'#dvSide .dv-actions', pos:'left', title:'🔒 Verrouiller & éditer', text:"Pour modifier : clique « Verrouiller / éditer ». Tu prends la main (personne d'autre ne peut écrire), tu <strong>télécharges</strong>, tu modifies dans Word, puis tu <strong>ré-uploades</strong> une nouvelle version. C'est le check-out / check-in, comme dans un vrai QMS."},
   {sel:'#dvCommentInput', pos:'top', title:'💬 Commenter', text:"Écris un commentaire visible par toute l'équipe. Tape « @ » pour mentionner quelqu'un — il reçoit une notification."},
   {sel:'#dvPlaceBtn', pos:'top', title:'📍 Commentaire ancré', text:"Tu peux placer un commentaire à un endroit PRÉCIS du document : écris, clique 📍, puis clique dans la page. Une épingle apparaît et le commentaire y est rattaché."},
   {sel:'#dvWorkflow', pos:'top', title:'⚙ Faire avancer (pousser)', text:"Pour « pousser » le document à la phase suivante, ouvre « Workflow & signatures »."},
-  {run:()=>{ closeModal('docViewerModal'); if(_tourDemo.docId) openDocDetail(_tourDemo.docId); }, sel:'#f_docPhase', pos:'bottom', title:'➡️ Pousser de phase', text:"Choisis la <strong>phase suivante</strong> (Rédaction → Revue équipe → Revue QA → Approbation → Prêt QMS), assigne une personne, coche « prévenir par email », puis « Valider la transition ». Le document avance et la personne est notifiée.<br><br>⚠️ Important : si le document est <strong>chez un collègue</strong>, seul lui (ou un administrateur) peut le faire avancer."},
+  {run:()=>{ closeModal('docViewerModal'); const id=_tourDocId(); if(id) openDocDetail(id); }, sel:'#f_docPhase', pos:'bottom', title:'➡️ Pousser de phase', text:"Choisis la <strong>phase suivante</strong> (Rédaction → Revue équipe → Revue QA → Approbation → Prêt QMS), assigne une personne, coche « prévenir par email », puis « Valider la transition ». Le document avance et la personne est notifiée.<br><br>⚠️ Important : si le document est <strong>chez un collègue</strong>, seul lui (ou un administrateur) peut le faire avancer."},
   {sel:'#btnDocTransition', pos:'top', title:'✒️ Signature électronique', text:"Sur les phases <strong>Approbation</strong> et <strong>Prêt QMS</strong>, l'app demande une signature : ré-saisie du mot de passe + motif. C'est tracé de façon immuable (esprit 21 CFR Part 11)."},
   // ----- Suite -----
   {run:()=>{ closeModal('docDetailModal'); closeModal('docViewerModal'); }, sel:'#btnNotif', pos:'bottom', title:'🔔 Notifications', text:"Tu es prévenu ici dès qu'un document ou une tâche t'est assigné, ou qu'on te mentionne."},
@@ -3114,8 +3114,13 @@ function ensureTourEls(){
   if(!$('tourOverlay')){const o=document.createElement('div');o.id='tourOverlay';o.className='tour-overlay';o.innerHTML='<div class="tour-spot" id="tourSpot"></div>';document.body.appendChild(o);}
   if(!$('tourPop')){const p=document.createElement('div');p.id='tourPop';p.className='tour-pop';document.body.appendChild(p);}
 }
+// Document à utiliser pour l'approfondissement : la démo si créée, sinon un document existant
+function _tourDocId(){return _tourDemo.docId || (state.documents && state.documents[0] && state.documents[0].id) || null;}
 async function tourCreateDemo(){
-  if(!CAN_PROJECTS||_tourDemo.projectId)return;
+  // Tout le monde peut créer la démo quand aucun projet n'existe (règle d'amorçage).
+  // Si la création échoue (ex. user rejouant la visite avec des projets existants),
+  // l'approfondissement documents se rabattra sur un document déjà présent.
+  if(_tourDemo.projectId)return;
   try{
     const p=await api('/api/projects',{method:'POST',body:{name:'🎓 Projet exemple (tutoriel)',description:'Projet de démonstration — supprimé à la fin de la visite.'}});
     _tourDemo.projectId=p.id;

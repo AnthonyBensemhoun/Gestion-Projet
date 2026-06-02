@@ -543,11 +543,16 @@ def update_project(pid: int, data: dict, u: User = Depends(require_project_manag
     return {"ok": True}
 
 @app.delete("/api/projects/{pid}")
-def delete_project(pid: int, u: User = Depends(require_project_manager), s: Session = Depends(get_session)):
+def delete_project(pid: int, u: User = Depends(require_user), s: Session = Depends(get_session)):
     p = s.get(Project, pid)
     if p:
+        # Admin / Team Leader, ou le créateur du projet (cas de l'amorçage / nettoyage de la visite)
+        if u.role not in ("admin", "lead") and p.created_by != u.id:
+            raise HTTPException(403, "Réservé aux Team Leaders, administrateurs ou au créateur du projet")
         _audit(s, u.name, "Suppression projet", p.name)
         for t in s.exec(select(Task).where(Task.project_id == pid)).all():
+            for ln in s.exec(select(TaskDocLink).where(TaskDocLink.task_id == t.id)).all():
+                s.delete(ln)
             s.delete(t)
         s.delete(p); s.commit()
     return {"ok": True}
@@ -1728,6 +1733,8 @@ def delete_document(doc_id: int, u: User = Depends(require_user), s: Session = D
             s.delete(x)
         for l in s.exec(select(DocLink).where((DocLink.document_id == doc_id) | (DocLink.target_id == doc_id))).all():
             s.delete(l)
+        for tl in s.exec(select(TaskDocLink).where(TaskDocLink.document_id == doc_id)).all():
+            s.delete(tl)
         _audit(s, u.name, "Suppression document", d.name)
         s.delete(d); s.commit()
     return {"ok": True}

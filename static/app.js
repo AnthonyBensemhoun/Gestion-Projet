@@ -728,6 +728,7 @@ function openTask(id){
     $('f_taskProject').value=state.currentProject||state.projects[0]?.id;
     $('subtasksWrap').classList.add('hidden');
     $('commentsWrap').classList.add('hidden');
+    $('taskDocsWrap').classList.add('hidden');
   }
 }
 async function saveTask(){
@@ -1808,7 +1809,7 @@ async function renderDocs(){
         return `<div class="doc-frow${d.obsolete?' obsolete':''}" data-open-doc="${d.id}">
           <span class="doc-frow-ic">📄</span>
           <div style="flex:1;min-width:0">
-            <div class="doc-frow-name">${esc(d.name)} ${d.obsolete?'<span class="doc-obsolete-badge">⚠ OBSOLÈTE</span>':''}</div>
+            <div class="doc-frow-name">${esc(d.name)} ${d.obsolete?'<span class="doc-obsolete-badge">⚠ OBSOLÈTE</span>':''}${(d.linked_tasks&&d.linked_tasks.length)?`<span class="tdl-badge" title="${d.linked_tasks.length} tâche(s) liée(s)">📎 ${d.linked_tasks.length}</span>`:''}</div>
             <div class="meta" style="font-size:11px">${DOC_TYPES[d.doc_type]||d.doc_type} · v${d.last_version}${proj?' · '+esc(proj.name):' · Service'}${d.assigned_to_name?' · chez '+esc(d.assigned_to_name):''}</div>
           </div>
           <span class="pill" style="background:${ph.color};color:#fff;font-size:10px;white-space:nowrap">${ph.ic} ${ph.label}</span>
@@ -2016,6 +2017,15 @@ async function openDocDetail(docId){
     </div>`:(canManageDoc?'<div class="meta" style="font-size:12px;margin-top:6px">Ouvre l\'onglet Documents pour charger la liste des documents à lier.</div>':'');
   const linksSection=`<h3 style="font-size:15px;margin:16px 0 4px">🔗 Liens documentaires</h3>${linkRows}${addLinkForm}`;
 
+  // ----- Tâches qui référencent ce document -----
+  const lt=(d.linked_tasks||[]);
+  const tasksLinkedSection=`<h3 style="font-size:15px;margin:16px 0 4px">📎 Tâches liées</h3>`+
+    (lt.length
+      ? lt.map(t=>`<div class="row" style="align-items:center;padding:5px 0;border-bottom:1px solid var(--line)">
+          <span style="font-size:13px">✓ <a class="doc-link-a" data-open-linked-task="${t.task_id}">${esc(t.title)}</a></span>
+        </div>`).join('')
+      : '<div class="meta" style="font-size:12px">Aucune tâche liée. (Tu peux lier un document depuis une tâche : ouvre-la → « 📎 Documents liés ».)</div>');
+
   const proj=d.project_id?projById(d.project_id):null;
   const slaHtml=d.sla_over
     ? `<span class="doc-sla-badge big">⏱ ${d.days_in_phase} j en phase · SLA dépassé (max ${d.sla_days} j)</span>`
@@ -2041,6 +2051,7 @@ async function openDocDetail(docId){
     ${timeline}
     ${ackPanel}
     ${linksSection}
+    ${tasksLinkedSection}
     ${transition}
 
     <div class="panel" style="padding:12px;margin-bottom:14px">
@@ -2111,6 +2122,10 @@ async function openDocDetail(docId){
     try{await api('/api/documents/'+d.id+'/links/remove',{method:'POST',body:{target_id:parseInt(tid,10),kind}});
       openDocDetail(d.id);renderDocs();}
     catch(e){toast(e.message,'err');}
+  }));
+  // Ouvrir une tâche liée depuis le document
+  c.querySelectorAll('[data-open-linked-task]').forEach(el=>el.addEventListener('click',()=>{
+    closeModal('docDetailModal');closeModal('docViewerModal');openTask(el.dataset.openLinkedTask);
   }));
   // Affiche le bloc signature si la phase choisie l'exige
   const phaseSel=$('f_docPhase');
@@ -2664,15 +2679,60 @@ async function toggleActivityDropdown(){
 
 /* ====== Sous-tâches ====== */
 async function loadSubtasks(taskId){
-  if(!taskId){$('subtasksWrap').classList.add('hidden');return;}
+  if(!taskId){['subtasksWrap','commentsWrap','taskDocsWrap'].forEach(id=>$(id)&&$(id).classList.add('hidden'));return;}
   $('subtasksWrap').classList.remove('hidden');
   $('commentsWrap').classList.remove('hidden');
-  const [subtasks,comments]=await Promise.all([
+  $('taskDocsWrap').classList.remove('hidden');
+  const [subtasks,comments,taskDocs,allDocs]=await Promise.all([
     api('/api/tasks/'+taskId+'/subtasks'),
-    api('/api/tasks/'+taskId+'/comments')
+    api('/api/tasks/'+taskId+'/comments'),
+    api('/api/tasks/'+taskId+'/documents'),
+    api('/api/documents')
   ]);
+  _taskSubtasks=subtasks;
   renderSubtaskList(subtasks, taskId);
   renderCommentList(comments);
+  renderTaskDocs(taskId, taskDocs, allDocs, subtasks);
+}
+let _taskSubtasks=[];
+function renderTaskDocs(taskId, links, allDocs, subtasks){
+  // Liste des documents déjà liés (regroupés par sous-tâche / tâche)
+  const list=$('taskDocList');
+  if(!links.length){
+    list.innerHTML='<div style="color:var(--mut);font-size:13px;font-style:italic">Aucun document lié pour l\'instant.</div>';
+  }else{
+    list.innerHTML=links.map(l=>{
+      const ph=DOC_PHASE_BY_KEY[l.phase];
+      const where=l.subtask_title?`<span class="tdl-sub">↳ ${esc(l.subtask_title)}</span>`:'';
+      return `<div class="tdl-item">
+        <span class="tdl-doc" data-open-linked-doc="${l.document_id}" title="Ouvrir le document">📄 ${esc(l.name)}${l.obsolete?' <span class="obs-tag">obsolète</span>':''}</span>
+        ${ph?`<span class="tdl-phase" style="color:${ph.color}">${ph.ic} ${ph.label}</span>`:''}
+        ${where}
+        <button class="x" data-unlink-doc="${l.id}" title="Retirer le lien">✕</button>
+      </div>`;
+    }).join('');
+    list.querySelectorAll('[data-open-linked-doc]').forEach(el=>el.addEventListener('click',()=>{
+      closeModal('taskModal');tab('docs');openDocViewer(el.dataset.openLinkedDoc);
+    }));
+    list.querySelectorAll('[data-unlink-doc]').forEach(b=>b.addEventListener('click',async function(){
+      try{await api('/api/task-documents/'+this.dataset.unlinkDoc,{method:'DELETE'});
+        const [td,ad]=await Promise.all([api('/api/tasks/'+taskId+'/documents'),api('/api/documents')]);
+        renderTaskDocs(taskId,td,ad,_taskSubtasks);toast('Lien retiré');}
+      catch(e){toast(e.message,'err');}
+    }));
+  }
+  // Sélecteur de document : docs du projet de la tâche + docs de service
+  const tk=state.tasks.find(x=>x.id==taskId)||allTasksCache.find(x=>x.id==taskId);
+  const tProj=tk?tk.project_id:state.currentProject;
+  const opts=allDocs
+    .filter(d=>!d.obsolete)
+    .filter(d=>d.project_id==tProj || d.project_id==null)
+    .map(d=>`<option value="${d.id}">${d.project_id?'📄':'🗂'} ${esc(d.name)}</option>`).join('');
+  $('f_linkDoc').innerHTML=opts?('<option value="">— Choisir un document —</option>'+opts)
+    :'<option value="">Aucun document disponible</option>';
+  // Sélecteur de sous-tâche (optionnel)
+  $('f_linkDocSub').innerHTML='<option value="">Toute la tâche</option>'
+    +subtasks.map(st=>`<option value="${st.id}">↳ ${esc(st.title)}</option>`).join('');
 }
 function renderSubtaskList(subtasks, taskId){
   const done=subtasks.filter(s=>s.done).length, total=subtasks.length;
@@ -2899,10 +2959,27 @@ if($('btnAddSubtask')) $('btnAddSubtask').addEventListener('click',async functio
     $('f_subtaskTitle').value='';
     const sts=await api('/api/tasks/'+currentEditTaskId+'/subtasks');
     renderSubtaskList(sts,currentEditTaskId);
+    _taskSubtasks=sts;
+    // tenir à jour le sélecteur de sous-tâche du picker de documents
+    if($('f_linkDocSub')) $('f_linkDocSub').innerHTML='<option value="">Toute la tâche</option>'+sts.map(st=>`<option value="${st.id}">↳ ${esc(st.title)}</option>`).join('');
     toast('Sous-tâche ajoutée');
   }catch(e){toast(e.message,'err');}
 });
 if($('f_subtaskTitle')) $('f_subtaskTitle').addEventListener('keydown',e=>{if(e.key==='Enter' && $('btnAddSubtask')) $('btnAddSubtask').click();});
+
+// Lier un document à la tâche / sous-tâche
+if($('btnLinkDoc')) $('btnLinkDoc').addEventListener('click',async function(){
+  if(!currentEditTaskId){toast('Enregistre d\'abord la tâche.','warn');return;}
+  const docId=$('f_linkDoc').value;
+  if(!docId){toast('Choisis un document.','warn');return;}
+  const subId=$('f_linkDocSub').value||null;
+  try{
+    await api('/api/tasks/'+currentEditTaskId+'/documents',{method:'POST',body:{document_id:parseInt(docId,10),subtask_id:subId?parseInt(subId,10):null}});
+    const [td,ad]=await Promise.all([api('/api/tasks/'+currentEditTaskId+'/documents'),api('/api/documents')]);
+    renderTaskDocs(currentEditTaskId,td,ad,_taskSubtasks);
+    toast('Document lié ✓');
+  }catch(e){toast(e.message,'err');}
+});
 
 // Commentaires + @mentions
 if($('btnAddComment')) $('btnAddComment').addEventListener('click',async function(){

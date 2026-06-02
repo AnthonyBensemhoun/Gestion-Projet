@@ -177,6 +177,13 @@ class DocLink(SQLModel, table=True):
     target_id: int = Field(index=True)       # document cible
     kind: str = "references"                  # references | replaces
 
+class TaskDocLink(SQLModel, table=True):
+    """Rattache un document à une tâche (et éventuellement à une sous-tâche précise)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    task_id: int = Field(index=True)
+    subtask_id: Optional[int] = Field(default=None, index=True)  # None = lié à la tâche elle-même
+    document_id: int = Field(index=True)
+
 class DocWorkflowEvent(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     document_id: int = Field(index=True)
@@ -699,7 +706,60 @@ def delete_subtask(sid: int, u: User = Depends(require_user), s: Session = Depen
     if st:
         t = s.get(Task, st.task_id)
         if not _can_edit_task(u, t): raise HTTPException(403)
+        # On retire aussi les liens documentaires rattachés à cette sous-tâche
+        for ln in s.exec(select(TaskDocLink).where(TaskDocLink.subtask_id == sid)).all():
+            s.delete(ln)
         s.delete(st); s.commit()
+    return {"ok": True}
+
+# ---------------- API : Documents liés aux tâches / sous-tâches ----------------
+@app.get("/api/tasks/{tid}/documents")
+def list_task_documents(tid: int, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    links = s.exec(select(TaskDocLink).where(TaskDocLink.task_id == tid)).all()
+    sub_titles = {st.id: st.title for st in s.exec(select(SubTask).where(SubTask.task_id == tid)).all()}
+    out = []
+    for ln in links:
+        d = s.get(Document, ln.document_id)
+        if not d:  # document supprimé entre-temps → on nettoie le lien
+            s.delete(ln); continue
+        out.append({
+            "id": ln.id, "document_id": d.id, "name": d.name,
+            "doc_type": d.doc_type or "DOC", "phase": d.phase, "obsolete": bool(d.obsolete),
+            "subtask_id": ln.subtask_id,
+            "subtask_title": sub_titles.get(ln.subtask_id) if ln.subtask_id else None,
+        })
+    s.commit()
+    return out
+
+@app.post("/api/tasks/{tid}/documents")
+def link_task_document(tid: int, data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    t = s.get(Task, tid)
+    if not t: raise HTTPException(404, "Tâche introuvable")
+    if not _can_edit_task(u, t): raise HTTPException(403)
+    doc_id = data.get("document_id")
+    d = s.get(Document, doc_id) if doc_id else None
+    if not d: raise HTTPException(400, "Document introuvable")
+    sub_id = data.get("subtask_id") or None
+    if sub_id:
+        st = s.get(SubTask, sub_id)
+        if not st or st.task_id != tid: raise HTTPException(400, "Sous-tâche invalide")
+    existing = s.exec(select(TaskDocLink).where(
+        TaskDocLink.task_id == tid, TaskDocLink.document_id == doc_id,
+        TaskDocLink.subtask_id == sub_id)).first()
+    if existing: raise HTTPException(400, "Ce document est déjà lié ici.")
+    s.add(TaskDocLink(task_id=tid, subtask_id=sub_id, document_id=doc_id))
+    _audit(s, u.name, "Lien document-tâche", f"{d.name} ↔ tâche « {t.title} »"
+           + (" / sous-tâche" if sub_id else ""))
+    s.commit()
+    return {"ok": True}
+
+@app.delete("/api/task-documents/{lid}")
+def unlink_task_document(lid: int, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    ln = s.get(TaskDocLink, lid)
+    if ln:
+        t = s.get(Task, ln.task_id)
+        if t and not _can_edit_task(u, t): raise HTTPException(403)
+        s.delete(ln); s.commit()
     return {"ok": True}
 
 # ---------------- API : Commentaires ----------------
@@ -1245,6 +1305,14 @@ def _doc_dict(s: Session, d: Document, versions=None, me_id=None):
     dist = s.exec(select(DocDistribution).where(DocDistribution.document_id == d.id)).all()
     dist_ids = [x.user_id for x in dist]
     dist_acked = sum(1 for uid in dist_ids if uid in acked_ids)
+    # Tâches qui référencent ce document
+    tlinks = s.exec(select(TaskDocLink).where(TaskDocLink.document_id == d.id)).all()
+    seen_t = {}
+    for ln in tlinks:
+        if ln.task_id in seen_t: continue
+        tk = s.get(Task, ln.task_id)
+        if tk: seen_t[ln.task_id] = tk.title
+    linked_tasks = [{"task_id": k, "title": v} for k, v in seen_t.items()]
     return {
         "id": d.id, "name": d.name, "description": d.description,
         "doc_type": d.doc_type or "DOC", "reference": d.reference or "",
@@ -1269,6 +1337,7 @@ def _doc_dict(s: Session, d: Document, versions=None, me_id=None):
         "sign_count": sign_count,
         "ack_count": len(acks), "my_ack": my_ack,
         "needs_ack": phase == "pret_qms",
+        "linked_tasks": linked_tasks,
     }
 
 @app.get("/api/documents")

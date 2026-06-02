@@ -63,6 +63,8 @@
       <button class="btn sm ghost" id="btnEditProj">Renommer</button>
       <button class="btn sm ghost" id="btnDelProj">Supprimer</button>
       {% endif %}
+      <button class="btn sm ghost" id="btnImportGantt" title="Importer un planning / Gantt (PDF) et créer les tâches">📥 Importer un planning</button>
+      <input type="file" id="ganttInput" accept=".pdf,.docx,.txt,.md,.csv" class="hidden">
     </div>
     <div class="topbar-actions">
       <button class="btn ghost sm" id="btnGlobalSearch" title="Rechercher (Ctrl+K)">🔍 <span class="hide-sm">Rechercher</span> <kbd class="hide-sm">⌘K</kbd></button>
@@ -335,8 +337,10 @@ window.CURRENT_USER = {
 <!-- Modale : créer un document -->
 <div class="modal-bg" id="docCreateModal"><div class="modal">
   <h2>Ajouter un document qualité</h2>
+  <div class="field"><label>Fichier (le nom sera rempli automatiquement)</label><input type="file" id="f_docFile" accept=".docx,.doc,.pdf,.xlsx,.xls,.pptx,.ppt,.txt,.md,.csv"></div>
   <div class="row" style="gap:12px">
-    <div class="field" style="flex:1"><label>Type de document</label>
+    <div class="field" style="flex:2"><label>Nom du document</label><input id="f_docName" placeholder="Auto-rempli depuis le fichier — modifiable"></div>
+    <div class="field" style="flex:1"><label>Type</label>
       <select id="f_docType">
         <option value="SOP">SOP</option>
         <option value="PROTO">Protocole</option>
@@ -346,13 +350,9 @@ window.CURRENT_USER = {
         <option value="DOC" selected>Document</option>
       </select>
     </div>
-    <div class="field" style="flex:1"><label>Référence</label>
-      <input id="f_docRefPreview" disabled placeholder="auto (ex : SOP-2026-014)" style="font-family:monospace"></div>
   </div>
-  <div class="field"><label>Nom du document</label><input id="f_docName" placeholder="Ex : Nettoyage poste d'assemblage"></div>
   <div class="field"><label>Description</label><textarea id="f_docDesc" rows="2" placeholder="Objet du document, périmètre…"></textarea></div>
   <div class="field"><label>Projet associé (optionnel)</label><select id="f_docProject"><option value="">— Document de service (général) —</option></select></div>
-  <div class="field"><label>Fichier</label><input type="file" id="f_docFile" accept=".docx,.doc,.pdf,.xlsx,.xls,.pptx,.ppt,.txt,.md,.csv"></div>
   <div class="field"><label>Note de version (optionnel)</label><input id="f_docNote" placeholder="Ex : Création initiale"></div>
   <div class="row" style="justify-content:flex-end;margin-top:8px">
     <button class="btn ghost" data-close="docCreateModal">Annuler</button>
@@ -368,6 +368,22 @@ window.CURRENT_USER = {
   </div>
 </div></div>
 <input type="file" id="docVersionFile" accept=".docx,.doc,.pdf,.xlsx,.xls,.pptx,.ppt,.txt,.md,.csv" class="hidden">
+
+<!-- Modale : revue d'import de planning / Gantt -->
+<div class="modal-bg" id="ganttModal"><div class="modal" style="width:min(820px,100%)">
+  <h2>📥 Import du planning</h2>
+  <div class="meta" id="ganttSub" style="margin-bottom:12px">L'IA a extrait les tâches ci-dessous. Décoche celles à ignorer, ajuste, puis importe.</div>
+  <div class="row" style="gap:8px;margin-bottom:8px;flex-wrap:wrap">
+    <button class="btn sm ghost" id="ganttAll">Tout cocher</button>
+    <button class="btn sm ghost" id="ganttNone">Tout décocher</button>
+    <span class="meta" style="margin-left:auto;font-size:12px"><span class="dist-chip" style="background:rgba(141,110,99,.15);color:#8d6e63;border-color:rgba(141,110,99,.3)">Fournisseur</span> = tâche externe (taguée automatiquement)</span>
+  </div>
+  <div id="ganttList" style="max-height:50vh;overflow:auto"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:14px;gap:8px">
+    <button class="btn ghost" data-close="ganttModal">Annuler</button>
+    <button class="btn primary" id="ganttApply">Importer les tâches cochées</button>
+  </div>
+</div></div>
 
 <!-- Lecteur de document (façon Veeva) : aperçu + commentaires -->
 <div class="modal-bg" id="docViewerModal"><div class="doc-viewer">

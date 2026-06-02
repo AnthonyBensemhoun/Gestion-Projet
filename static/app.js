@@ -1607,9 +1607,9 @@ async function renderDocs(){
         : '<div class="meta" style="font-size:11px">Non assigné</div>';
       const ref=d.reference?`<span class="doc-ref">${esc(d.reference)}</span>`:'';
       const sla=d.sla_over?`<span class="doc-sla-badge" title="Délai indicatif de ${d.sla_days} j dépassé">⏱ ${d.days_in_phase} j · SLA dépassé</span>`:'';
-      return `<div class="doc-pcard${d.sla_over?' sla-over':''}" data-open-doc="${d.id}">
+      return `<div class="doc-pcard${d.sla_over?' sla-over':''}${d.obsolete?' obsolete':''}" data-open-doc="${d.id}">
         <div class="row" style="justify-content:space-between;align-items:flex-start;gap:6px">
-          ${ref}
+          ${ref||(d.obsolete?'<span class="doc-obsolete-badge">⚠ OBSOLÈTE</span>':'')}
           <span class="pill" style="font-size:10px">v${d.last_version}</span>
         </div>
         <strong style="font-size:13px;line-height:1.3;display:block;margin-top:4px">📄 ${esc(d.name)}</strong>
@@ -1744,31 +1744,55 @@ async function openDocDetail(docId){
       <div class="meta" style="font-size:12px">« ${esc(sg.reason)} » · ${fmtDateTime(sg.signed_at)}</div>
     </div>`).join('')||'<div class="empty">Aucune signature pour le moment</div>';
 
-  // ----- Lu & compris (accusés de lecture) -----
+  // ----- Lu & compris (accusés + liste de diffusion) -----
+  const canManageDoc=IS_ADMIN || d.created_by===ME.id;
   let ackPanel='';
   if(d.needs_ack){
-    const names=(d.acks||[]).map(a=>esc(a.user_name)).join(', ');
+    const dist=(d.distribution||[]);
+    const distProgress=dist.length?`<div class="meta" style="margin-top:6px;font-size:12.5px">Diffusion : <strong>${d.dist_acked}/${d.dist_count}</strong> lecteur(s) requis ont accusé réception</div>
+      <div class="dist-list">${dist.map(x=>`<span class="dist-chip ${x.acked?'ok':''}">${x.acked?'✓':'⏳'} ${esc(x.user_name)}</span>`).join('')}</div>`
+      :`<div class="meta" style="margin-top:6px;font-size:12px">${d.ack_count} accusé(s) de lecture libre sur v${d.last_version}</div>`;
+    const showAck=!d.my_ack && (d.dist_count===0 || d.my_required || canManageDoc);
     ackPanel=`<div class="panel doc-ack-panel">
       <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
         <strong style="font-size:14px">📖 Lu &amp; compris</strong>
-        ${d.my_ack
-          ? `<span style="color:var(--ok);font-weight:600;font-size:13px">✓ Tu as accusé réception (v${d.last_version})</span>`
-          : `<button class="btn primary sm" id="btnDocAck">✓ J'ai lu et compris ce document</button>`}
+        <div class="row" style="gap:6px;flex-wrap:wrap">
+          ${d.my_ack?`<span style="color:var(--ok);font-weight:600;font-size:13px">✓ Tu as accusé (v${d.last_version})</span>`:(showAck?`<button class="btn primary sm" id="btnDocAck">✓ J'ai lu et compris</button>`:'')}
+          ${canManageDoc?`<button class="btn sm ghost" id="btnManageDist">👥 Liste de diffusion</button>`:''}
+        </div>
       </div>
-      <div class="meta" style="margin-top:6px;font-size:12px">${d.ack_count} accusé(s) de lecture sur v${d.last_version}${names?' : '+names:''}</div>
+      ${distProgress}
+      <div id="distEditor" class="hidden" style="margin-top:10px"></div>
     </div>`;
   }
+
+  // ----- Liens documentaires (remplace / référence) -----
+  const repl=(d.replaced_by||[]);
+  const replWarn=repl.length?`<div class="doc-obsolete-warn">⚠ Ce document est <strong>remplacé par</strong> : ${repl.map(r=>`<a class="doc-link-a" data-open-doc="${r.doc_id}">${esc(r.doc_name)}</a>`).join(', ')}</div>`:'';
+  const linkRows=(d.links||[]).map(l=>`<div class="row" style="justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--line)">
+      <span style="font-size:13px">${l.kind==='replaces'?'↪ <strong>Remplace</strong>':'🔗 Référence'} : <a class="doc-link-a" data-open-doc="${l.target_id}">${esc(l.target_name)}</a></span>
+      ${canManageDoc?`<button class="x" data-rmlink="${l.target_id}|${l.kind}">✕</button>`:''}
+    </div>`).join('')||'<div class="meta" style="font-size:12px">Aucun lien.</div>';
+  const otherDocs=(state.documents||[]).filter(x=>x.id!==d.id);
+  const addLinkForm=canManageDoc&&otherDocs.length?`<div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap">
+      <select id="f_linkKind" class="btn sm"><option value="references">🔗 Référence</option><option value="replaces">↪ Remplace</option></select>
+      <select id="f_linkTarget" class="btn sm" style="flex:1;min-width:150px"><option value="">— Document cible —</option>${otherDocs.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>
+      <button class="btn sm" id="btnAddLink">+ Lier</button>
+    </div>`:(canManageDoc?'<div class="meta" style="font-size:12px;margin-top:6px">Ouvre l\'onglet Documents pour charger la liste des documents à lier.</div>':'');
+  const linksSection=`<h3 style="font-size:15px;margin:16px 0 4px">🔗 Liens documentaires</h3>${linkRows}${addLinkForm}`;
 
   const proj=d.project_id?projById(d.project_id):null;
   const slaHtml=d.sla_over
     ? `<span class="doc-sla-badge big">⏱ ${d.days_in_phase} j en phase · SLA dépassé (max ${d.sla_days} j)</span>`
     : (d.sla_days?`<span class="meta" style="font-size:11px;white-space:nowrap">⏱ ${d.days_in_phase} j en phase / ${d.sla_days} j</span>`:'');
   c.innerHTML=`
+    ${replWarn}
     <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px">
       <div style="min-width:0">
         <div class="row" style="gap:7px;align-items:center;flex-wrap:wrap">
           ${d.reference?`<span class="doc-ref lg">${esc(d.reference)}</span>`:''}
           <span class="pill">${DOC_TYPES[d.doc_type]||d.doc_type}</span>
+          ${d.obsolete?'<span class="doc-obsolete-badge">⚠ OBSOLÈTE</span>':''}
         </div>
         <h2 style="margin:7px 0 0">📄 ${esc(d.name)}</h2>
       </div>
@@ -1779,6 +1803,7 @@ async function openDocDetail(docId){
 
     ${timeline}
     ${ackPanel}
+    ${linksSection}
     ${transition}
 
     <div class="panel" style="padding:12px;margin-bottom:14px">
@@ -1812,6 +1837,36 @@ async function openDocDetail(docId){
   if(trBtn) trBtn.addEventListener('click',docTransition);
   const ackBtn=$('btnDocAck');
   if(ackBtn) ackBtn.addEventListener('click',ackDoc);
+  // Gestion de la liste de diffusion
+  const mgBtn=$('btnManageDist');
+  if(mgBtn) mgBtn.addEventListener('click',()=>{
+    const ed=$('distEditor');
+    const current=new Set((d.distribution||[]).map(x=>x.user_id));
+    ed.innerHTML=`<div class="dist-editor">${state.users.map(usr=>`<label class="dist-opt"><input type="checkbox" value="${usr.id}" ${current.has(usr.id)?'checked':''}> ${esc(usr.name)}</label>`).join('')}</div>
+      <button class="btn sm primary" id="btnSaveDist" style="margin-top:8px">Enregistrer la diffusion</button>`;
+    ed.classList.remove('hidden');
+    $('btnSaveDist').addEventListener('click',async()=>{
+      const ids=[...ed.querySelectorAll('input:checked')].map(i=>parseInt(i.value,10));
+      try{await api('/api/documents/'+d.id+'/distribution',{method:'POST',body:{user_ids:ids}});
+        toast('Liste de diffusion mise à jour');await loadNotifications();renderNotifBell();openDocDetail(d.id);}
+      catch(e){toast(e.message,'err');}
+    });
+  });
+  // Liens documentaires
+  const addLink=$('btnAddLink');
+  if(addLink) addLink.addEventListener('click',async()=>{
+    const target=$('f_linkTarget').value, kind=$('f_linkKind').value;
+    if(!target){toast('Choisis un document cible.','err');return;}
+    try{await api('/api/documents/'+d.id+'/links',{method:'POST',body:{target_id:parseInt(target,10),kind}});
+      toast('Lien ajouté');openDocDetail(d.id);renderDocs();}
+    catch(e){toast(e.message,'err');}
+  });
+  c.querySelectorAll('[data-rmlink]').forEach(b=>b.addEventListener('click',async function(){
+    const [tid,kind]=this.dataset.rmlink.split('|');
+    try{await api('/api/documents/'+d.id+'/links/remove',{method:'POST',body:{target_id:parseInt(tid,10),kind}});
+      openDocDetail(d.id);renderDocs();}
+    catch(e){toast(e.message,'err');}
+  }));
   // Affiche le bloc signature si la phase choisie l'exige
   const phaseSel=$('f_docPhase');
   function toggleSign(){const need=DOC_SIGN_PHASES.includes(phaseSel.value);$('docSignBlock').classList.toggle('hidden',!need);}
@@ -1849,6 +1904,7 @@ async function openDocViewer(docId){
     <strong style="font-size:15px">📄 ${esc(d.name)}</strong>
     <span class="pill" style="background:${ph.color};color:#fff;font-size:10px">${ph.ic} ${ph.label}</span>
     <span class="meta" style="font-size:11px">v${d.last_version}</span>
+    ${d.obsolete?'<span class="doc-obsolete-badge">⚠ OBSOLÈTE</span>':''}
     ${d.sla_over?`<span class="doc-sla-badge">⏱ SLA dépassé</span>`:''}
   </div>`;
   renderDocPreview(d, cur);
@@ -1857,31 +1913,33 @@ async function openDocViewer(docId){
 }
 async function renderDocPreview(d, cur){
   const pv=$('dvPreview');
-  if(!cur){pv.innerHTML='<div class="empty">Aucun fichier</div>';return;}
+  pv.innerHTML='<div class="dv-watermark"></div><div class="dv-content" id="dvContent"></div>';
+  const c=$('dvContent');
+  if(!cur){c.innerHTML='<div class="empty">Aucun fichier</div>';return;}
   const name=(cur.filename||'').toLowerCase();
   const ext=name.split('.').pop();
   const viewUrl='/api/documents/'+d.id+'/versions/'+cur.id+'/view';
   const dlUrl='/api/documents/'+d.id+'/versions/'+cur.id+'/download';
   if(name.endsWith('.pdf')){
-    pv.innerHTML=`<iframe class="dv-frame" src="${viewUrl}#toolbar=1"></iframe>`;
+    c.innerHTML=`<iframe class="dv-frame" src="${viewUrl}#toolbar=1"></iframe>`;
   }else if(name.endsWith('.docx')){
-    pv.innerHTML='<div class="dv-loading">Rendu du document…</div>';
+    c.innerHTML='<div class="dv-loading">Rendu du document…</div>';
     try{
       const blob=await (await fetch(viewUrl)).blob();
-      pv.innerHTML=`<div class="dv-note">ℹ️ Aperçu web — la mise en forme exacte peut différer. <a href="${dlUrl}">Télécharger l'original</a> pour la version officielle.</div><div class="dv-docx" id="dvDocx"></div>`;
+      c.innerHTML=`<div class="dv-note">ℹ️ Aperçu web — la mise en forme exacte peut différer. <a href="${dlUrl}">Télécharger l'original</a> pour la version officielle.</div><div class="dv-docx" id="dvDocx"></div>`;
       if(window.docx&&docx.renderAsync){
         await docx.renderAsync(blob, $('dvDocx'), null, {inWrapper:true, className:'docx', ignoreWidth:false});
       }else{
         $('dvDocx').innerHTML=`<div class="empty">Lecteur DOCX indisponible. <a href="${dlUrl}">Télécharger</a></div>`;
       }
     }catch(e){
-      pv.innerHTML=`<div class="dv-noprev"><div style="font-size:42px">📄</div><p>Aperçu impossible.</p><a class="btn primary" href="${dlUrl}">⬇ Télécharger le document</a></div>`;
+      c.innerHTML=`<div class="dv-noprev"><div style="font-size:42px">📄</div><p>Aperçu impossible.</p><a class="btn primary" href="${dlUrl}">⬇ Télécharger le document</a></div>`;
     }
   }else if(/\.(txt|md|csv)$/.test(name)){
-    try{const txt=await (await fetch(viewUrl)).text();const pre=document.createElement('pre');pre.className='dv-text';pre.textContent=txt;pv.innerHTML='';pv.appendChild(pre);}
-    catch{pv.innerHTML=`<div class="dv-noprev"><a class="btn primary" href="${dlUrl}">⬇ Télécharger</a></div>`;}
+    try{const txt=await (await fetch(viewUrl)).text();const pre=document.createElement('pre');pre.className='dv-text';pre.textContent=txt;c.innerHTML='';c.appendChild(pre);}
+    catch{c.innerHTML=`<div class="dv-noprev"><a class="btn primary" href="${dlUrl}">⬇ Télécharger</a></div>`;}
   }else{
-    pv.innerHTML=`<div class="dv-noprev">
+    c.innerHTML=`<div class="dv-noprev">
       <div style="font-size:48px">📄</div>
       <p>Aperçu non disponible pour ce format (.${esc(ext)}).<br>Word/Excel/PowerPoint s'ouvrent dans l'application bureautique.</p>
       <a class="btn primary" href="${dlUrl}">⬇ Télécharger le document</a>
@@ -2056,6 +2114,59 @@ async function deleteDoc(id){
 function openDocCreate(){
   $('f_docProject').innerHTML='<option value="">— Document de service (général) —</option>'+state.projects.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
   $('docCreateModal').classList.add('show');
+  $('f_docFile').value='';$('f_docName').value='';
+}
+// Auto-remplit le nom du document depuis le fichier choisi (modifiable ensuite)
+if($('f_docFile')) $('f_docFile').addEventListener('change',function(){
+  const f=this.files[0];if(!f)return;
+  const base=f.name.replace(/\.[^.]+$/,'');  // sans extension
+  if(!$('f_docName').value.trim()) $('f_docName').value=base;
+});
+
+/* ====== Import de planning / Gantt (IA) ====== */
+let _ganttTasks=[];
+function startGanttImport(file){
+  if(!state.currentProject){toast('Sélectionne d\'abord un projet.','err');return;}
+  toast('🤖 Analyse du planning par l\'IA…');
+  const fd=new FormData();fd.append('file',file);
+  fetch('/api/projects/'+state.currentProject+'/import-gantt',{method:'POST',body:fd})
+    .then(async r=>{if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.detail||'Erreur '+r.status);}return r.json();})
+    .then(d=>{_ganttTasks=d.tasks||[];if(!_ganttTasks.length){toast('Aucune tâche détectée dans ce fichier.','warn');return;}openGanttReview();})
+    .catch(e=>toast(e.message,'err'));
+}
+function openGanttReview(){
+  const proj=projById(state.currentProject);
+  $('ganttSub').innerHTML=`<strong>${_ganttTasks.length}</strong> tâche(s) détectée(s) pour « ${esc(proj?proj.name:'')} ». Décoche celles à ignorer, ajuste, puis importe. Les tâches <strong>Fournisseur</strong> seront taguées automatiquement.`;
+  renderGanttList();
+  $('ganttModal').classList.add('show');
+}
+function renderGanttList(){
+  $('ganttList').innerHTML=`<div class="gantt-row gantt-head"><span></span><span>Tâche</span><span>Début</span><span>Échéance</span><span>Fourn.</span></div>`+
+    _ganttTasks.map((t,i)=>`<div class="gantt-row">
+      <input type="checkbox" class="gantt-ck" data-i="${i}" checked>
+      <input class="gantt-title" data-i="${i}" value="${esc(t.title||'')}">
+      <input type="date" class="gantt-start" data-i="${i}" value="${esc((t.start_date||'').slice(0,10))}">
+      <input type="date" class="gantt-due" data-i="${i}" value="${esc((t.due_date||'').slice(0,10))}">
+      <input type="checkbox" class="gantt-extck" data-i="${i}" ${t.external?'checked':''}>
+    </div>`).join('');
+}
+async function applyGanttImport(){
+  const L=$('ganttList');
+  L.querySelectorAll('.gantt-title').forEach(inp=>{_ganttTasks[inp.dataset.i].title=inp.value;});
+  L.querySelectorAll('.gantt-start').forEach(inp=>{_ganttTasks[inp.dataset.i].start_date=inp.value;});
+  L.querySelectorAll('.gantt-due').forEach(inp=>{_ganttTasks[inp.dataset.i].due_date=inp.value;});
+  L.querySelectorAll('.gantt-extck').forEach(inp=>{_ganttTasks[inp.dataset.i].external=inp.checked;});
+  const sel=[];
+  L.querySelectorAll('.gantt-ck:checked').forEach(ck=>sel.push(_ganttTasks[ck.dataset.i]));
+  if(!sel.length){toast('Aucune tâche cochée.','warn');return;}
+  try{
+    const r=await api('/api/projects/'+state.currentProject+'/gantt-apply',{method:'POST',body:{tasks:sel}});
+    closeModal('ganttModal');
+    toast(`✅ ${r.created} tâche(s) importée(s) dans le projet`);
+    state.tasks=await api('/api/tasks?project_id='+state.currentProject);
+    await loadProjectTags();
+    renderAll();
+  }catch(e){toast(e.message,'err');}
 }
 
 /* ====== Toasts ====== */
@@ -2277,6 +2388,12 @@ if($('docVersionFile')) $('docVersionFile').addEventListener('change',function(e
 $('btnExportPDF').addEventListener('click',exportPDF);
 $('btnImportDoc').addEventListener('click',()=>$('docInput').click());
 $('docInput').addEventListener('change',function(e){const f=e.target.files[0];if(f)startDocImport(f);e.target.value='';});
+// Import de planning / Gantt
+if($('btnImportGantt')) $('btnImportGantt').addEventListener('click',()=>$('ganttInput').click());
+if($('ganttInput')) $('ganttInput').addEventListener('change',function(e){const f=e.target.files[0];if(f)startGanttImport(f);e.target.value='';});
+if($('ganttApply')) $('ganttApply').addEventListener('click',applyGanttImport);
+if($('ganttAll')) $('ganttAll').addEventListener('click',()=>$('ganttList').querySelectorAll('.gantt-ck').forEach(c=>c.checked=true));
+if($('ganttNone')) $('ganttNone').addEventListener('click',()=>$('ganttList').querySelectorAll('.gantt-ck').forEach(c=>c.checked=false));
 
 // Boutons liste
 if($('btnExportCSV')) $('btnExportCSV').addEventListener('click',exportCSV);

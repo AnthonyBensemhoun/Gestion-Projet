@@ -125,7 +125,8 @@ class Document(SQLModel, table=True):
     name: str
     description: str = ""
     doc_type: str = "DOC"      # SOP / PROTO / REPORT / FORM / IT / DOC
-    reference: str = ""        # référence auto : ex SOP-2026-014
+    reference: str = ""        # référence (non utilisée — réservée)
+    obsolete: bool = Field(default=False)  # marqué obsolète (remplacé par un autre doc)
     status: str = "draft"      # draft / review / approved (dérivé de la phase)
     phase: str = "redaction"   # workflow : redaction / revue_equipe / revue_qa / approbation / pret_qms
     phase_since: Optional[datetime] = Field(default=None)  # entrée dans la phase actuelle (SLA)
@@ -159,6 +160,17 @@ class DocComment(SQLModel, table=True):
     user_id: Optional[int] = Field(default=None)
     text: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class DocDistribution(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    document_id: int = Field(index=True)
+    user_id: int = Field(index=True)   # lecteur dont l'accusé est requis
+
+class DocLink(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    document_id: int = Field(index=True)     # document source
+    target_id: int = Field(index=True)       # document cible
+    kind: str = "references"                  # references | replaces
 
 class DocWorkflowEvent(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -294,6 +306,8 @@ def on_startup():
              "ALTER TABLE document ADD COLUMN reference VARCHAR DEFAULT ''"),
             ('ALTER TABLE document ADD COLUMN IF NOT EXISTS phase_since TIMESTAMP',
              "ALTER TABLE document ADD COLUMN phase_since TIMESTAMP"),
+            ('ALTER TABLE document ADD COLUMN IF NOT EXISTS obsolete BOOLEAN DEFAULT FALSE NOT NULL',
+             "ALTER TABLE document ADD COLUMN obsolete BOOLEAN DEFAULT 0 NOT NULL"),
         ]
         for pg_stmt, sq_stmt in migrations:
             try:
@@ -1129,12 +1143,20 @@ def _doc_dict(s: Session, d: Document, versions=None, me_id=None):
     # Signatures + accusés de lecture (version courante)
     sign_count = len(s.exec(select(DocSignature).where(DocSignature.document_id == d.id)).all())
     acks = s.exec(select(DocAck).where(DocAck.document_id == d.id, DocAck.version == cur_ver)).all()
-    my_ack = bool(me_id and any(a.user_id == me_id for a in acks))
+    acked_ids = {a.user_id for a in acks}
+    my_ack = bool(me_id and me_id in acked_ids)
+    # Liste de diffusion (lecteurs requis)
+    dist = s.exec(select(DocDistribution).where(DocDistribution.document_id == d.id)).all()
+    dist_ids = [x.user_id for x in dist]
+    dist_acked = sum(1 for uid in dist_ids if uid in acked_ids)
     return {
         "id": d.id, "name": d.name, "description": d.description,
         "doc_type": d.doc_type or "DOC", "reference": d.reference or "",
+        "obsolete": bool(d.obsolete),
         "status": d.status, "project_id": d.project_id,
         "phase": phase,
+        "dist_count": len(dist_ids), "dist_acked": dist_acked,
+        "my_required": bool(me_id and me_id in dist_ids),
         "phase_since": since.isoformat() if since else None,
         "days_in_phase": days_in_phase, "sla_days": sla_days, "sla_over": sla_over,
         "assigned_to": d.assigned_to, "assigned_to_name": _user_name(s, d.assigned_to),
@@ -1185,10 +1207,29 @@ def get_document(doc_id: int, u: User = Depends(require_user), s: Session = Depe
     } for sg in sigs]
     cur_ver = out["last_version"]
     acks = s.exec(select(DocAck).where(DocAck.document_id == doc_id, DocAck.version == cur_ver)).all()
+    acked_ids = {a.user_id: a for a in acks}
     out["acks"] = [{
         "user_name": _user_name(s, a.user_id),
         "acknowledged_at": a.acknowledged_at.isoformat() if a.acknowledged_at else None,
     } for a in acks]
+    # Liste de diffusion : qui doit lire + statut
+    dist = s.exec(select(DocDistribution).where(DocDistribution.document_id == doc_id)).all()
+    out["distribution"] = [{
+        "user_id": x.user_id, "user_name": _user_name(s, x.user_id),
+        "acked": x.user_id in acked_ids,
+    } for x in dist]
+    # Liens vers/depuis d'autres documents
+    links = s.exec(select(DocLink).where(DocLink.document_id == doc_id)).all()
+    out["links"] = [{
+        "target_id": l.target_id, "kind": l.kind,
+        "target_name": (s.get(Document, l.target_id).name if s.get(Document, l.target_id) else "?"),
+    } for l in links]
+    # Documents qui remplacent CELUI-CI (liens entrants 'replaces')
+    incoming = s.exec(select(DocLink).where(DocLink.target_id == doc_id, DocLink.kind == "replaces")).all()
+    out["replaced_by"] = [{
+        "doc_id": l.document_id,
+        "doc_name": (s.get(Document, l.document_id).name if s.get(Document, l.document_id) else "?"),
+    } for l in incoming]
     return out
 
 @app.post("/api/documents/{doc_id}/transition")
@@ -1256,6 +1297,68 @@ def ack_document(doc_id: int, u: User = Depends(require_user), s: Session = Depe
         s.commit()
     return {"ok": True}
 
+@app.post("/api/documents/{doc_id}/distribution")
+def set_distribution(doc_id: int, data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    d = s.get(Document, doc_id)
+    if not d: raise HTTPException(404, "Document introuvable")
+    if u.role != "admin" and d.created_by != u.id:
+        raise HTTPException(403, "Seul le créateur ou un admin gère la liste de diffusion")
+    new_ids = set()
+    for x in (data.get("user_ids") or []):
+        try: new_ids.add(int(x))
+        except (TypeError, ValueError): pass
+    existing = s.exec(select(DocDistribution).where(DocDistribution.document_id == doc_id)).all()
+    existing_ids = {x.user_id for x in existing}
+    # Supprimer ceux retirés
+    for x in existing:
+        if x.user_id not in new_ids:
+            s.delete(x)
+    # Ajouter + notifier les nouveaux
+    for uid in new_ids:
+        if uid in existing_ids: continue
+        if not s.get(User, uid): continue
+        s.add(DocDistribution(document_id=doc_id, user_id=uid))
+        _notify(s, uid, "doc_read_required", f"Lecture requise : {d.name}",
+                f"Tu dois prendre connaissance du document « {d.name} » et accuser réception.",
+                doc_id=doc_id, actor_id=u.id)
+    _audit(s, u.name, "Liste de diffusion document", f"{d.name} — {len(new_ids)} lecteur(s)")
+    s.commit()
+    return {"ok": True}
+
+@app.post("/api/documents/{doc_id}/links")
+def add_doc_link(doc_id: int, data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    d = s.get(Document, doc_id)
+    if not d: raise HTTPException(404, "Document introuvable")
+    target_id = data.get("target_id")
+    kind = data.get("kind", "references")
+    if kind not in ("references", "replaces"): raise HTTPException(400, "Type de lien invalide")
+    target = s.get(Document, target_id) if target_id else None
+    if not target or target.id == doc_id: raise HTTPException(400, "Document cible invalide")
+    exists = s.exec(select(DocLink).where(DocLink.document_id == doc_id,
+                    DocLink.target_id == target_id, DocLink.kind == kind)).first()
+    if not exists:
+        s.add(DocLink(document_id=doc_id, target_id=target_id, kind=kind))
+        if kind == "replaces":
+            s.execute(sa_update(Document).where(Document.id == target_id).values(obsolete=True))
+        _audit(s, u.name, "Lien document", f"{d.name} {kind} {target.name}")
+        s.commit()
+    return {"ok": True}
+
+@app.post("/api/documents/{doc_id}/links/remove")
+def remove_doc_link(doc_id: int, data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    target_id = data.get("target_id"); kind = data.get("kind")
+    link = s.exec(select(DocLink).where(DocLink.document_id == doc_id,
+                  DocLink.target_id == target_id, DocLink.kind == kind)).first()
+    if link:
+        s.delete(link); s.commit()
+        # Si plus aucun lien 'replaces' ne pointe vers la cible, lever l'obsolescence
+        if kind == "replaces":
+            still = s.exec(select(DocLink).where(DocLink.target_id == target_id, DocLink.kind == "replaces")).first()
+            if not still:
+                s.execute(sa_update(Document).where(Document.id == target_id).values(obsolete=False))
+                s.commit()
+    return {"ok": True}
+
 @app.post("/api/documents")
 async def create_document(
     name: str = Form(...), description: str = Form(""),
@@ -1272,11 +1375,10 @@ async def create_document(
     if len(content) > DOC_MAX_SIZE:
         raise HTTPException(400, "Fichier trop volumineux (max 25 Mo)")
     dtype = doc_type if doc_type in DOC_TYPES else "DOC"
-    reference = _next_doc_reference(s, dtype)
     d = Document(name=name, description=description.strip(),
                  project_id=project_id, created_by=u.id, status="draft",
                  phase="redaction", assigned_to=u.id,
-                 doc_type=dtype, reference=reference, phase_since=datetime.utcnow())
+                 doc_type=dtype, reference="", phase_since=datetime.utcnow())
     s.add(d); s.commit(); s.refresh(d)
     v = DocumentVersion(document_id=d.id, version=1, filename=file.filename,
                         mime_type=file.content_type or "application/octet-stream",
@@ -1432,33 +1534,132 @@ def delete_document(doc_id: int, u: User = Depends(require_user), s: Session = D
             s.delete(a)
         for cm in s.exec(select(DocComment).where(DocComment.document_id == doc_id)).all():
             s.delete(cm)
+        for x in s.exec(select(DocDistribution).where(DocDistribution.document_id == doc_id)).all():
+            s.delete(x)
+        for l in s.exec(select(DocLink).where((DocLink.document_id == doc_id) | (DocLink.target_id == doc_id))).all():
+            s.delete(l)
         _audit(s, u.name, "Suppression document", d.name)
         s.delete(d); s.commit()
     return {"ok": True}
 
 # ---------------- API : Document Import ----------------
+def _extract_text(name: str, content: bytes) -> str:
+    name = (name or "").lower()
+    if name.endswith(".txt") or name.endswith(".md") or name.endswith(".csv"):
+        return content.decode("utf-8", errors="ignore")
+    if name.endswith(".docx"):
+        from docx import Document as _Docx
+        doc = _Docx(io.BytesIO(content))
+        return "\n".join(p.text for p in doc.paragraphs)
+    if name.endswith(".pdf"):
+        from pypdf import PdfReader
+        r = PdfReader(io.BytesIO(content))
+        return "\n".join(p.extract_text() or "" for p in r.pages)
+    raise HTTPException(400, "Format non supporté (PDF, DOCX, TXT)")
+
 @app.post("/api/parse-document")
 async def parse_document(file: UploadFile = File(...), u: User = Depends(require_user)):
     """Extrait le texte d'un PDF/DOCX/TXT et le renvoie pour analyse côté navigateur."""
-    name = file.filename.lower()
     content = await file.read()
-    text = ""
     try:
-        if name.endswith(".txt") or name.endswith(".md"):
-            text = content.decode("utf-8", errors="ignore")
-        elif name.endswith(".docx"):
-            from docx import Document
-            doc = Document(io.BytesIO(content))
-            text = "\n".join(p.text for p in doc.paragraphs)
-        elif name.endswith(".pdf"):
-            from pypdf import PdfReader
-            r = PdfReader(io.BytesIO(content))
-            text = "\n".join(p.extract_text() or "" for p in r.pages)
-        else:
-            raise HTTPException(400, "Format non supporté (PDF, DOCX, TXT seulement)")
+        text = _extract_text(file.filename, content)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(400, f"Lecture impossible : {e}")
     return {"text": text}
+
+# ---------------- API : Import d'un planning / Gantt (IA) ----------------
+_GANTT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "tasks": {"type": "array", "items": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "start_date": {"type": "string"},
+                "due_date": {"type": "string"},
+                "owner": {"type": "string"},
+                "external": {"type": "boolean"},
+            },
+            "required": ["title", "start_date", "due_date", "owner", "external"],
+            "additionalProperties": False,
+        }}
+    },
+    "required": ["tasks"],
+    "additionalProperties": False,
+}
+_GANTT_SYS = (
+    "Tu extrais les tâches d'un planning ou diagramme de Gantt fourni en texte brut. "
+    "Pour CHAQUE tâche réelle : 'title' = libellé court et clair ; 'start_date' et 'due_date' "
+    "au format AAAA-MM-JJ (chaîne vide si la date est absente ou illisible) ; 'owner' = responsable/société "
+    "si indiqué (sinon chaîne vide) ; 'external' = true si la tâche semble appartenir à un FOURNISSEUR / prestataire "
+    "externe plutôt qu'à l'équipe interne (indices : nom de société, colonne fournisseur, 'supplier', 'vendor'…). "
+    "Ignore les en-têtes de colonnes, titres de phase vides, totaux et lignes qui ne sont pas des tâches. "
+    "Réponds uniquement via le format structuré demandé."
+)
+
+@app.post("/api/projects/{pid}/import-gantt")
+async def import_gantt(pid: int, file: UploadFile = File(...),
+                       u: User = Depends(require_user), s: Session = Depends(get_session)):
+    if not s.get(Project, pid):
+        raise HTTPException(404, "Projet introuvable")
+    content = await file.read()
+    try:
+        text = _extract_text(file.filename, content)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"Lecture impossible : {e}")
+    if not text.strip():
+        raise HTTPException(400, "Aucun texte exploitable dans ce fichier (PDF scanné en image ?).")
+    client = _get_ai_client()
+    try:
+        resp = client.messages.create(
+            model=AI_MODEL, max_tokens=8000,
+            system=[{"type": "text", "text": _GANTT_SYS, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": "Planning à analyser :\n" + text[:14000]}],
+            output_config={"format": {"type": "json_schema", "schema": _GANTT_SCHEMA}},
+        )
+    except Exception as e:
+        msg = str(e)
+        if "authentication" in msg.lower() or "401" in msg:
+            raise HTTPException(401, "Clé API Anthropic invalide (ANTHROPIC_API_KEY).")
+        raise HTTPException(502, f"Erreur IA : {msg}")
+    out = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
+    try:
+        tasks = json.loads(out).get("tasks", [])
+    except Exception:
+        raise HTTPException(502, "Réponse IA illisible.")
+    return {"tasks": tasks[:80]}
+
+@app.post("/api/projects/{pid}/gantt-apply")
+def gantt_apply(pid: int, data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    proj = s.get(Project, pid)
+    if not proj: raise HTTPException(404, "Projet introuvable")
+    def _safe_date(v):
+        if not v or not isinstance(v, str): return None
+        try: return date.fromisoformat(v[:10])
+        except Exception: return None
+    ext_tag = None
+    created = 0
+    for t in (data.get("tasks") or []):
+        title = (t.get("title") or "").strip()
+        if not title: continue
+        task = Task(project_id=pid, title=title[:200], status="todo", priority="m",
+                    start_date=_safe_date(t.get("start_date")), due_date=_safe_date(t.get("due_date")))
+        s.add(task); s.commit(); s.refresh(task)
+        if t.get("external"):
+            if ext_tag is None:
+                ext_tag = s.exec(select(Tag).where(Tag.project_id == pid, Tag.name == "Fournisseur")).first()
+                if not ext_tag:
+                    ext_tag = Tag(project_id=pid, name="Fournisseur", color="#8d6e63")
+                    s.add(ext_tag); s.commit(); s.refresh(ext_tag)
+            s.add(TaskTag(task_id=task.id, tag_id=ext_tag.id))
+        created += 1
+    _audit(s, u.name, "Import planning (Gantt)", f"{proj.name} — {created} tâche(s)")
+    s.commit()
+    return {"ok": True, "created": created}
 
 # ---------------- Rapport hebdomadaire ----------------
 REPORT_RECIPIENT = os.environ.get("WEEKLY_REPORT_EMAIL", "charlotte.foujols@alivedx.com")

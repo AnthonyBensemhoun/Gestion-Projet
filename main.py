@@ -500,7 +500,15 @@ def list_projects(u: User = Depends(require_user), s: Session = Depends(get_sess
             for p in s.exec(select(Project).order_by(Project.name)).all()]
 
 @app.post("/api/projects")
-def create_project(data: dict, u: User = Depends(require_project_manager), s: Session = Depends(get_session)):
+def create_project(data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    # Amorçage : tant qu'aucun projet n'existe, n'importe quel utilisateur peut créer
+    # le tout premier projet (parcours de découverte). Ensuite, la création est
+    # réservée aux Team Leaders et administrateurs.
+    if u.role not in ("admin", "lead"):
+        existing = s.exec(select(Project)).first()
+        if existing:
+            raise HTTPException(403, "La création de projets est réservée aux Team Leaders et administrateurs. "
+                                     "Demande à ton Team Leader de créer le projet.")
     name = data.get("name", "").strip()
     if not name: raise HTTPException(400, "Nom requis")
     lead_id = data.get("lead_id")
@@ -1811,6 +1819,7 @@ MANUAL_FEATURES = [
         "Repère les personnes en surcharge ; estimation IA possible."]),
     ("Équipe & rôles", "Gestion des accès", [
         "Rôles : Utilisateur, Team Leader (gère les projets), Administrateur.",
+        "Amorçage : tant qu'aucun projet n'existe, tout le monde peut créer le premier ; ensuite la création revient aux Team Leaders et admins.",
         "Statut en ligne et dernière connexion de chaque membre.",
         "Invitations et rappels par email."]),
     ("Absences & Alertes", "Disponibilités et points d'attention", [

@@ -113,7 +113,15 @@ function renderAll(){
 function renderProjBar(){
   const sel=$('projSelect');
   const meta=$('projMeta');
-  if(!state.projects.length){sel.innerHTML='<option value="">Aucun projet</option>';if(meta)meta.innerHTML='';return;}
+  if(!state.projects.length){
+    sel.innerHTML='<option value="">Aucun projet</option>';
+    // Amorçage : tant qu'aucun projet n'existe, tout le monde peut créer le premier.
+    if(meta){
+      meta.innerHTML='<button class="btn sm primary" id="btnBootstrapProj">＋ Créer le premier projet</button>';
+      const b=$('btnBootstrapProj'); if(b) b.onclick=addProject;
+    }
+    return;
+  }
   sel.innerHTML = state.projects.map(p=>`<option value="${p.id}"${p.id==state.currentProject?' selected':''}>${esc(p.name)}</option>`).join('');
   // Info chef de projet du projet courant
   if(meta){
@@ -3009,7 +3017,7 @@ const TOUR_STEPS=[
   {sel:'#f_due', pos:'bottom', title:"5️⃣ L'échéance", text:"Fixe la date limite : elle alimente le calendrier, le Gantt et les alertes de retard."},
   {sel:'#f_prog', pos:'top', title:"6️⃣ L'avancement", text:"Glisse le curseur d'avancement au fil de l'eau (100% = terminé)."},
   {sel:'#btnSaveTask', pos:'top', title:'7️⃣ Enregistrer', text:"Clique « Enregistrer » pour créer ta première tâche, puis « Suivant » pour finir."},
-  {run:()=>closeModal('taskModal'), center:true, last:true, title:'✅ Ça y est, tu es prêt !', text:"Tu sais créer un projet et des tâches, gérer tes documents (lecteur, verrouillage, commentaires, signatures) et suivre ton équipe. Bonne organisation avec Helix 🚀"},
+  {run:()=>closeModal('taskModal'), center:true, last:true, title:'✅ Ça y est, tu es prêt !', text:"Tu sais créer un projet et des tâches, gérer tes documents (lecteur, verrouillage, commentaires, signatures) et suivre ton équipe.<br><br>ℹ️ Bon à savoir : la création des <strong>projets suivants</strong> est gérée par ton <strong>Team Leader</strong> (ou un administrateur). Bonne organisation avec Helix 🚀"},
 ];
 let _tourI=0, _tourDir=1, _tourDemo={projectId:null,docId:null}, _tourPrevProject=null;
 function ensureTourEls(){

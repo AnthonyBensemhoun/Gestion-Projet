@@ -418,6 +418,32 @@ input[type=checkbox]{accent-color:var(--acc);width:16px;height:16px;cursor:point
 .cal-abs-roster-list{display:flex;flex-wrap:wrap;gap:14px;margin-top:6px}
 .cal-abs-roster-item{display:inline-flex;align-items:center;gap:6px;font-size:12.5px}
 
+/* ---- WORKFLOW DOCUMENTAIRE (pipeline + timeline) ---- */
+.doc-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.doc-pipeline{display:flex;gap:12px;overflow-x:auto;padding-bottom:8px;align-items:flex-start}
+.doc-col{flex:0 0 230px;min-width:230px;background:var(--panel2);border:1px solid var(--line);border-radius:var(--r-lg,12px);overflow:hidden}
+.doc-col-head{display:flex;justify-content:space-between;align-items:center;padding:9px 11px;font-size:12px;font-weight:800;background:var(--panel);text-transform:uppercase;letter-spacing:.3px}
+.doc-col-count{background:var(--line);border-radius:99px;padding:1px 8px;font-size:11px}
+.doc-col-body{padding:9px;display:flex;flex-direction:column;gap:9px;min-height:60px}
+.doc-col-empty{color:var(--mut);text-align:center;font-size:18px;padding:10px 0;opacity:.4}
+.doc-pcard{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md,10px);padding:10px;cursor:pointer;transition:transform var(--t-fast),box-shadow var(--t-fast),border-color var(--t-fast)}
+.doc-pcard:hover{transform:translateY(-2px);box-shadow:var(--shadow-sm);border-color:var(--acc)}
+.doc-assignee{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mut)}
+
+/* Timeline animée */
+.doc-timeline{position:relative;margin:18px 0 6px;padding:0 6px}
+.doc-tl-track{position:absolute;top:16px;left:6%;right:6%;height:4px;background:var(--line);border-radius:99px;overflow:hidden}
+.doc-tl-fill{height:100%;background:linear-gradient(90deg,var(--acc),#2e9e5b);border-radius:99px;width:0;transition:width 1.1s cubic-bezier(.4,0,.2,1)}
+.doc-tl-steps{position:relative;display:flex;justify-content:space-between}
+.doc-tl-step{display:flex;flex-direction:column;align-items:center;gap:6px;flex:1;text-align:center}
+.doc-tl-dot{width:34px;height:34px;border-radius:50%;background:var(--panel2);border:2px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:15px;z-index:1;color:#fff;transition:all .4s}
+.doc-tl-step.todo .doc-tl-dot{filter:grayscale(.6);opacity:.55}
+.doc-tl-step.current .doc-tl-dot{box-shadow:0 0 0 5px rgba(232,100,47,.18);animation:docPulse 1.6s ease-in-out infinite}
+.doc-tl-label{font-size:11px;font-weight:700;color:var(--mut);max-width:80px}
+.doc-tl-step.current .doc-tl-label,.doc-tl-step.done .doc-tl-label{color:var(--text)}
+@keyframes docPulse{0%,100%{box-shadow:0 0 0 5px rgba(232,100,47,.18)}50%{box-shadow:0 0 0 9px rgba(232,100,47,.05)}}
+.doc-holder{display:flex;align-items:center;gap:9px;background:var(--panel2);border-radius:var(--r-md,10px);padding:9px 12px;margin-top:6px;font-size:13px}
+
 /* ---- KANBAN ---- */
 .kanban-board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start}
 @media(max-width:720px){.kanban-board{grid-template-columns:1fr}}

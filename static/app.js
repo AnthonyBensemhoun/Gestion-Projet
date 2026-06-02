@@ -1143,7 +1143,17 @@ async function renderAudit(){
 /* ====== Documents qualité ====== */
 const DOC_STATUS_LABEL={draft:'Brouillon',review:'En revue',approved:'Approuvé'};
 const DOC_STATUS_COLOR={draft:'#8a8478',review:'var(--warn)',approved:'var(--ok)'};
-let currentDocId=null;
+// Workflow documentaire (style Veeva) — phases ordonnées
+const DOC_PHASES=[
+  {key:'redaction',    label:'Rédaction',     ic:'✍️', color:'#8a8478'},
+  {key:'revue_equipe', label:'Revue équipe',  ic:'👥', color:'#2f7fd6'},
+  {key:'revue_qa',     label:'Revue QA',      ic:'🔬', color:'#9b59b6'},
+  {key:'approbation',  label:'Approbation',   ic:'✅', color:'#f3a712'},
+  {key:'pret_qms',     label:'Prêt pour QMS', ic:'🚀', color:'#2e9e5b'},
+];
+const DOC_PHASE_BY_KEY=Object.fromEntries(DOC_PHASES.map(p=>[p.key,p]));
+function docPhaseIndex(k){return DOC_PHASES.findIndex(p=>p.key===k);}
+let currentDocId=null, currentDocObj=null, docProjectFilter='';
 
 function fmtBytes(n){
   if(!n) return '0 o';
@@ -1158,34 +1168,62 @@ function fmtDateTime(iso){
 
 async function renderDocs(){
   const el=$('docsList');if(!el)return;
+  el.className='';  // on n'utilise pas la grille ici, mais un pipeline horizontal
   el.innerHTML='<div class="empty">Chargement…</div>';
   let docs;
   try{docs=await api('/api/documents');}
   catch(e){el.innerHTML='<div class="empty">Erreur : '+esc(e.message)+'</div>';return;}
   state.documents=docs;
-  if(!docs.length){el.innerHTML='<div class="empty">Aucun document. Clique sur « + Ajouter un document ».</div>';return;}
-  el.innerHTML=docs.map(d=>{
-    const lockedByOther=d.locked_by && d.locked_by!==ME.id;
-    const lockBadge=d.locked_by
-      ? `<span class="pill" style="background:rgba(214,56,63,.12);color:var(--bad)">🔒 ${esc(d.locked_by_name||'?')}${d.locked_by===ME.id?' (toi)':''}</span>`
-      : '';
-    const proj=d.project_id?projById(d.project_id):null;
-    return `<div class="card" style="cursor:pointer" data-open-doc="${d.id}">
-      <div class="row" style="justify-content:space-between;align-items:flex-start">
-        <span class="tag" style="background:${DOC_STATUS_COLOR[d.status]};color:#fff">${DOC_STATUS_LABEL[d.status]||d.status}</span>
-        <span class="pill">v${d.last_version}</span>
+
+  // Filtre projet
+  const projOpts=['<option value="">Tous les documents</option>',
+    '<option value="service">📁 Documents de service</option>']
+    .concat(state.projects.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`)).join('');
+  const filterBar=`<div class="doc-toolbar">
+    <label style="font-size:12px;font-weight:700;color:var(--mut)">PROJET :</label>
+    <select id="docProjFilter" class="btn sm">${projOpts}</select>
+  </div>`;
+
+  let filtered=docs;
+  if(docProjectFilter==='service') filtered=docs.filter(d=>!d.project_id);
+  else if(docProjectFilter) filtered=docs.filter(d=>String(d.project_id)===String(docProjectFilter));
+
+  if(!filtered.length){
+    el.innerHTML=filterBar+'<div class="empty">Aucun document. Clique sur « + Ajouter un document ».</div>';
+    const fs=$('docProjFilter');if(fs){fs.value=docProjectFilter;fs.addEventListener('change',function(){docProjectFilter=this.value;renderDocs();});}
+    return;
+  }
+
+  // Pipeline : une colonne par phase
+  const cols=DOC_PHASES.map(ph=>{
+    const inPhase=filtered.filter(d=>(d.phase||'redaction')===ph.key);
+    const cards=inPhase.map(d=>{
+      const proj=d.project_id?projById(d.project_id):null;
+      const lock=d.locked_by?`<span class="pill" style="background:rgba(214,56,63,.12);color:var(--bad);font-size:10px">🔒 ${esc(d.locked_by_name||'?')}</span>`:'';
+      const assignee=d.assigned_to_name
+        ? `<div class="doc-assignee"><span class="ava" style="width:22px;height:22px;font-size:10px;background:${avaColor(d.assigned_to)}">${initials(d.assigned_to_name)}</span><span>${esc(d.assigned_to_name)}</span></div>`
+        : '<div class="meta" style="font-size:11px">Non assigné</div>';
+      return `<div class="doc-pcard" data-open-doc="${d.id}">
+        <div class="row" style="justify-content:space-between;align-items:flex-start;gap:6px">
+          <strong style="font-size:13px;line-height:1.3">📄 ${esc(d.name)}</strong>
+          <span class="pill" style="font-size:10px">v${d.last_version}</span>
+        </div>
+        ${proj?`<div class="meta" style="font-size:11px">📁 ${esc(proj.name)}</div>`:'<div class="meta" style="font-size:11px">📁 Service</div>'}
+        <div style="margin-top:6px">${assignee}</div>
+        ${lock?`<div style="margin-top:5px">${lock}</div>`:''}
+      </div>`;
+    }).join('');
+    return `<div class="doc-col">
+      <div class="doc-col-head" style="border-top:3px solid ${ph.color}">
+        <span>${ph.ic} ${ph.label}</span><span class="doc-col-count">${inPhase.length}</span>
       </div>
-      <h3 style="margin-top:8px">📄 ${esc(d.name)}</h3>
-      ${d.description?`<div class="meta">${esc(d.description)}</div>`:''}
-      ${proj?`<div class="meta">📁 ${esc(proj.name)}</div>`:'<div class="meta">📁 Document de service</div>'}
-      <div class="meta" style="margin-top:6px">✏️ Dernière modif : <strong>${esc(d.last_modified_by||'?')}</strong></div>
-      <div class="meta">🕐 ${fmtDateTime(d.last_modified_at)}</div>
-      <div class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap">
-        <span class="pill">${d.version_count} version(s)</span>
-        ${lockBadge}
-      </div>
+      <div class="doc-col-body">${cards||'<div class="doc-col-empty">—</div>'}</div>
     </div>`;
   }).join('');
+
+  el.innerHTML=filterBar+`<div class="doc-pipeline">${cols}</div>`;
+  const fs=$('docProjFilter');
+  if(fs){fs.value=docProjectFilter;fs.addEventListener('change',function(){docProjectFilter=this.value;renderDocs();});}
 }
 
 async function openDocDetail(docId){
@@ -1196,16 +1234,37 @@ async function openDocDetail(docId){
   let d;
   try{d=await api('/api/documents/'+currentDocId);}
   catch(e){c.innerHTML='<div class="empty">Erreur : '+esc(e.message)+'</div>';return;}
+  currentDocObj=d;
   const isLockedByMe=d.locked_by===ME.id;
-  const isLockedByOther=d.locked_by && d.locked_by!==ME.id;
-  const canDelete=IS_ADMIN || d.created_by_name===ME.name;
+  const canDelete=IS_ADMIN || d.created_by===ME.id;
   const cur=d.versions[0];
+  const phaseIdx=Math.max(0,docPhaseIndex(d.phase||'redaction'));
+  const curPhase=DOC_PHASES[phaseIdx];
 
+  // ----- Timeline animée -----
+  const pct=DOC_PHASES.length>1 ? Math.round(phaseIdx/(DOC_PHASES.length-1)*100) : 0;
+  const steps=DOC_PHASES.map((ph,i)=>{
+    const cls=i<phaseIdx?'done':(i===phaseIdx?'current':'todo');
+    return `<div class="doc-tl-step ${cls}">
+      <div class="doc-tl-dot" style="${i<=phaseIdx?'background:'+ph.color+';border-color:'+ph.color:''}">${i<phaseIdx?'✓':ph.ic}</div>
+      <div class="doc-tl-label">${ph.label}</div>
+    </div>`;
+  }).join('');
+  const timeline=`<div class="doc-timeline">
+    <div class="doc-tl-track"><div class="doc-tl-fill" style="width:0%" data-fill="${pct}"></div></div>
+    <div class="doc-tl-steps">${steps}</div>
+  </div>
+  <div class="doc-holder">
+    ${d.assigned_to_name
+      ? `<span class="ava" style="width:26px;height:26px;font-size:11px;background:${avaColor(d.assigned_to)}">${initials(d.assigned_to_name)}</span>
+         <span>Actuellement chez <strong>${esc(d.assigned_to_name)}</strong> — phase <strong style="color:${curPhase.color}">${curPhase.label}</strong></span>`
+      : `<span>Phase <strong style="color:${curPhase.color}">${curPhase.label}</strong> — non assigné</span>`}
+  </div>`;
+
+  // ----- Verrou / édition -----
   const lockInfo=d.locked_by
     ? `<div class="meta" style="color:${isLockedByMe?'var(--ok)':'var(--bad)'};font-weight:600">🔒 Verrouillé par ${esc(d.locked_by_name)}${isLockedByMe?' (toi)':''} — ${fmtDateTime(d.locked_at)}</div>`
     : `<div class="meta" style="color:var(--ok)">🔓 Disponible pour édition</div>`;
-
-  // Boutons d'action selon l'état du verrou
   let actionBtns='';
   if(!d.locked_by){
     actionBtns=`<button class="btn primary sm" data-doc-lock="${d.id}">🔒 Verrouiller pour éditer</button>`;
@@ -1217,10 +1276,41 @@ async function openDocDetail(docId){
                 ${IS_ADMIN?`<button class="btn ghost sm" data-doc-unlock="${d.id}">Forcer le déverrouillage (admin)</button>`:''}`;
   }
 
-  const statusSel=`<select id="f_docStatus" class="btn sm">
-    ${Object.keys(DOC_STATUS_LABEL).map(k=>`<option value="${k}"${d.status===k?' selected':''}>${DOC_STATUS_LABEL[k]}</option>`).join('')}
-  </select>`;
+  // ----- Formulaire de transition (faire avancer) -----
+  const nextIdx=Math.min(phaseIdx+1,DOC_PHASES.length-1);
+  const phaseOpts=DOC_PHASES.map((ph,i)=>`<option value="${ph.key}"${i===nextIdx?' selected':''}>${ph.ic} ${ph.label}</option>`).join('');
+  const assigneeOpts='<option value="">— Personne (optionnel) —</option>'+state.users.map(usr=>`<option value="${usr.id}">${esc(usr.name)}</option>`).join('');
+  const transition=`<div class="panel" style="padding:13px;margin:14px 0;border-left:3px solid var(--acc)">
+    <strong style="font-size:14px">➡️ Faire avancer / transférer le document</strong>
+    <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:10px">
+      <div class="field" style="flex:1;min-width:150px;margin:0"><label style="font-size:11px">Nouvelle phase</label>
+        <select id="f_docPhase" class="btn sm" style="width:100%">${phaseOpts}</select></div>
+      <div class="field" style="flex:1;min-width:150px;margin:0"><label style="font-size:11px">Assigner à</label>
+        <select id="f_docAssignee" class="btn sm" style="width:100%">${assigneeOpts}</select></div>
+    </div>
+    <div class="field" style="margin:8px 0 0"><label style="font-size:11px">Note (optionnel)</label>
+      <input id="f_docTransNote" placeholder="Ex : prêt pour relecture QA" style="width:100%;background:var(--panel2);border:1.5px solid var(--line);padding:7px 10px;border-radius:var(--r-sm);outline:none;font-size:13px"></div>
+    <label class="row" style="gap:6px;margin-top:8px;font-size:13px;cursor:pointer">
+      <input type="checkbox" id="f_docNotify" checked> Prévenir la personne par email (ouvre Outlook)
+    </label>
+    <div class="row" style="justify-content:flex-end;margin-top:8px">
+      <button class="btn primary sm" id="btnDocTransition">Valider la transition</button>
+    </div>
+  </div>`;
 
+  // ----- Historique workflow -----
+  const wfHtml=(d.workflow||[]).slice().reverse().map(w=>{
+    const ph=DOC_PHASE_BY_KEY[w.phase]||{ic:'•',label:w.phase,color:'var(--mut)'};
+    return `<div class="row" style="gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--line)">
+      <span style="font-size:15px">${ph.ic}</span>
+      <div style="flex:1">
+        <div style="font-size:13px"><strong style="color:${ph.color}">${ph.label}</strong>${w.assigned_to_name?` → chez ${esc(w.assigned_to_name)}`:''}</div>
+        <div class="meta" style="font-size:11px">Par ${esc(w.moved_by_name||'?')} · ${fmtDateTime(w.created_at)}${w.note?' · '+esc(w.note):''}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // ----- Versions -----
   const versionsHtml=d.versions.map(v=>`
     <div class="row" style="justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line)">
       <div style="flex:1;min-width:0">
@@ -1234,43 +1324,67 @@ async function openDocDetail(docId){
       <a class="btn sm ghost" href="/api/documents/${d.id}/versions/${v.id}/download">⬇ Télécharger</a>
     </div>`).join('');
 
+  const proj=d.project_id?projById(d.project_id):null;
   c.innerHTML=`
-    <div class="row" style="justify-content:space-between;align-items:flex-start">
-      <h2 style="margin:0">📄 ${esc(d.name)}</h2>
-      <span class="tag" style="background:${DOC_STATUS_COLOR[d.status]};color:#fff">${DOC_STATUS_LABEL[d.status]}</span>
-    </div>
+    <h2 style="margin:0">📄 ${esc(d.name)}</h2>
     ${d.description?`<div class="meta" style="margin-top:6px">${esc(d.description)}</div>`:''}
-    <div class="meta" style="margin-top:4px">Créé par ${esc(d.created_by_name||'?')} · ${fmtDateTime(d.created_at)}</div>
-    <div style="margin:12px 0">${lockInfo}</div>
+    <div class="meta" style="margin-top:4px">${proj?'📁 '+esc(proj.name):'📁 Document de service'} · Créé par ${esc(d.created_by_name||'?')} · ${fmtDateTime(d.created_at)}</div>
+
+    ${timeline}
+    ${transition}
 
     <div class="panel" style="padding:12px;margin-bottom:14px">
-      <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
+      ${lockInfo}
+      <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
         ${cur?`<a class="btn sm" href="/api/documents/${d.id}/versions/${cur.id}/download">⬇ Télécharger la dernière (v${cur.version})</a>`:''}
         ${actionBtns}
       </div>
       ${isLockedByMe?`<div class="meta" style="margin-top:8px;font-size:12px">💡 Édite le fichier téléchargé dans Word, puis clique « Uploader nouvelle version ».</div>`:''}
     </div>
 
-    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
-      <strong>Statut qualité :</strong> ${statusSel}
-    </div>
+    <h3 style="font-size:15px;margin:16px 0 4px">🗂 Historique du workflow</h3>
+    <div style="max-height:180px;overflow:auto">${wfHtml||'<div class="empty">Aucune étape</div>'}</div>
 
-    <h3 style="font-size:15px;margin:16px 0 4px">Historique des versions (${d.versions.length})</h3>
-    <div style="max-height:260px;overflow:auto">${versionsHtml||'<div class="empty">Aucune version</div>'}</div>
+    <h3 style="font-size:15px;margin:16px 0 4px">📑 Historique des versions (${d.versions.length})</h3>
+    <div style="max-height:220px;overflow:auto">${versionsHtml||'<div class="empty">Aucune version</div>'}</div>
 
     ${canDelete?`<div class="row" style="justify-content:flex-start;margin-top:14px">
       <button class="btn sm ghost" style="color:var(--bad)" data-doc-delete="${d.id}">🗑 Supprimer ce document</button>
     </div>`:''}
   `;
 
-  // Wiring local
-  const stSel=$('f_docStatus');
-  if(stSel) stSel.addEventListener('change',async function(){
-    try{await api('/api/documents/'+d.id,{method:'PUT',body:{status:this.value}});toast('Statut mis à jour');renderDocs();}
-    catch(e){toast(e.message,'err');}
-  });
+  // Animation de la barre de progression (remplissage)
+  requestAnimationFrame(()=>{const f=c.querySelector('.doc-tl-fill');if(f)requestAnimationFrame(()=>{f.style.width=f.dataset.fill+'%';});});
   const upBtn=$('btnUploadNewVersion');
   if(upBtn) upBtn.addEventListener('click',()=>$('docVersionFile').click());
+  const trBtn=$('btnDocTransition');
+  if(trBtn) trBtn.addEventListener('click',docTransition);
+}
+
+async function docTransition(){
+  if(!currentDocId)return;
+  const phase=$('f_docPhase').value;
+  const assigneeVal=$('f_docAssignee').value;
+  const note=$('f_docTransNote').value.trim();
+  const notify=$('f_docNotify').checked;
+  const ph=DOC_PHASE_BY_KEY[phase];
+  try{
+    const r=await api('/api/documents/'+currentDocId+'/transition',{method:'POST',
+      body:{phase, assigned_to: assigneeVal?parseInt(assigneeVal,10):null, note}});
+    toast('Document déplacé en « '+(ph?ph.label:phase)+' »');
+    // Notification email via Outlook (mailto)
+    if(notify && r.assignee_email){
+      const docName=currentDocObj?currentDocObj.name:'document';
+      const appUrl=window.location.origin;
+      const subject=`[Document qualité] ${docName} — ${ph?ph.label:phase} : action requise`;
+      const body=`Bonjour ${(r.assignee_name||'').split(' ')[0]},\n\nLe document « ${docName} » vient de passer en phase « ${ph?ph.label:phase} » et t'a été assigné pour action / revue.\n${note?'\nNote : '+note+'\n':''}\nAccède à l'application pour le consulter :\n${appUrl}\n\nMerci,\n${ME.name}`;
+      window.location.href='mailto:'+encodeURIComponent(r.assignee_email)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
+    }else if(notify && assigneeVal && !r.assignee_email){
+      toast("Pas d'email pour cette personne — notification non envoyée.",'warn');
+    }
+    openDocDetail(currentDocId);
+    renderDocs();
+  }catch(e){toast(e.message,'err');}
 }
 
 async function uploadNewVersion(file){

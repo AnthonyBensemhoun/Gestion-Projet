@@ -124,10 +124,21 @@ class Document(SQLModel, table=True):
     project_id: Optional[int] = Field(default=None, index=True)  # None = document de service (global)
     name: str
     description: str = ""
-    status: str = "draft"      # draft / review / approved
+    status: str = "draft"      # draft / review / approved (dérivé de la phase)
+    phase: str = "redaction"   # workflow : redaction / revue_equipe / revue_qa / approbation / pret_qms
+    assigned_to: Optional[int] = Field(default=None)  # personne chez qui le document se trouve actuellement
     locked_by: Optional[int] = Field(default=None)   # user_id ayant verrouillé pour édition
     locked_at: Optional[datetime] = Field(default=None)
     created_by: Optional[int] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class DocWorkflowEvent(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    document_id: int = Field(index=True)
+    phase: str = ""
+    assigned_to: Optional[int] = Field(default=None)
+    moved_by: Optional[int] = Field(default=None)
+    note: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class DocumentVersion(SQLModel, table=True):
@@ -223,6 +234,10 @@ def on_startup():
              "ALTER TABLE user ADD COLUMN last_login TIMESTAMP"),
             ('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP',
              "ALTER TABLE user ADD COLUMN last_seen TIMESTAMP"),
+            ("ALTER TABLE document ADD COLUMN IF NOT EXISTS phase VARCHAR DEFAULT 'redaction'",
+             "ALTER TABLE document ADD COLUMN phase VARCHAR DEFAULT 'redaction'"),
+            ('ALTER TABLE document ADD COLUMN IF NOT EXISTS assigned_to INTEGER',
+             "ALTER TABLE document ADD COLUMN assigned_to INTEGER"),
         ]
         for pg_stmt, sq_stmt in migrations:
             try:
@@ -924,6 +939,12 @@ def ai_estimate_load(data: dict, u: User = Depends(require_admin), s: Session = 
 DOC_MAX_SIZE = 25 * 1024 * 1024  # 25 Mo
 DOC_ALLOWED_EXT = (".docx", ".doc", ".pdf", ".xlsx", ".xls", ".pptx", ".ppt", ".txt", ".md", ".csv")
 DOC_STATUS = ("draft", "review", "approved")
+# Workflow documentaire (style Veeva) — phases ordonnées avant la validation officielle QMS
+DOC_PHASES = ["redaction", "revue_equipe", "revue_qa", "approbation", "pret_qms"]
+DOC_PHASE_STATUS = {  # statut "simple" dérivé de la phase (rétrocompat)
+    "redaction": "draft", "revue_equipe": "review", "revue_qa": "review",
+    "approbation": "review", "pret_qms": "approved",
+}
 
 def _user_name(s: Session, uid):
     if not uid: return None
@@ -938,9 +959,11 @@ def _doc_dict(s: Session, d: Document, versions=None):
     return {
         "id": d.id, "name": d.name, "description": d.description,
         "status": d.status, "project_id": d.project_id,
+        "phase": d.phase or "redaction",
+        "assigned_to": d.assigned_to, "assigned_to_name": _user_name(s, d.assigned_to),
         "locked_by": d.locked_by, "locked_by_name": _user_name(s, d.locked_by),
         "locked_at": d.locked_at.isoformat() if d.locked_at else None,
-        "created_by_name": _user_name(s, d.created_by),
+        "created_by": d.created_by, "created_by_name": _user_name(s, d.created_by),
         "created_at": d.created_at.isoformat() if d.created_at else None,
         "version_count": len(versions),
         "last_version": cur.version if cur else 0,
@@ -967,7 +990,41 @@ def get_document(doc_id: int, u: User = Depends(require_user), s: Session = Depe
         "uploaded_by_name": _user_name(s, v.uploaded_by),
         "uploaded_at": v.uploaded_at.isoformat() if v.uploaded_at else None,
     } for v in versions]
+    wf = s.exec(select(DocWorkflowEvent).where(DocWorkflowEvent.document_id == doc_id)
+               .order_by(DocWorkflowEvent.created_at.asc())).all()
+    out["workflow"] = [{
+        "phase": w.phase, "assigned_to_name": _user_name(s, w.assigned_to),
+        "moved_by_name": _user_name(s, w.moved_by), "note": w.note,
+        "created_at": w.created_at.isoformat() if w.created_at else None,
+    } for w in wf]
     return out
+
+@app.post("/api/documents/{doc_id}/transition")
+def transition_document(doc_id: int, data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    d = s.get(Document, doc_id)
+    if not d: raise HTTPException(404, "Document introuvable")
+    phase = data.get("phase")
+    if phase not in DOC_PHASES:
+        raise HTTPException(400, "Phase invalide")
+    assigned_to = data.get("assigned_to")
+    if assigned_to:
+        if not s.get(User, assigned_to):
+            raise HTTPException(400, "Personne assignée introuvable")
+    else:
+        assigned_to = None
+    note = (data.get("note") or "").strip()
+    s.execute(sa_update(Document).where(Document.id == doc_id).values(
+        phase=phase, assigned_to=assigned_to, status=DOC_PHASE_STATUS.get(phase, d.status)))
+    s.add(DocWorkflowEvent(document_id=doc_id, phase=phase, assigned_to=assigned_to,
+                           moved_by=u.id, note=note))
+    _audit(s, u.name, "Transition document", f"{d.name} → {phase}"
+           + (f" (chez {_user_name(s, assigned_to)})" if assigned_to else ""))
+    s.commit()
+    # infos pour la notification email côté client (mailto)
+    target = s.get(User, assigned_to) if assigned_to else None
+    return {"ok": True, "phase": phase,
+            "assignee_email": target.email if target else None,
+            "assignee_name": target.name if target else None}
 
 @app.post("/api/documents")
 async def create_document(
@@ -984,13 +1041,16 @@ async def create_document(
     if len(content) > DOC_MAX_SIZE:
         raise HTTPException(400, "Fichier trop volumineux (max 25 Mo)")
     d = Document(name=name, description=description.strip(),
-                 project_id=project_id, created_by=u.id, status="draft")
+                 project_id=project_id, created_by=u.id, status="draft",
+                 phase="redaction", assigned_to=u.id)
     s.add(d); s.commit(); s.refresh(d)
     v = DocumentVersion(document_id=d.id, version=1, filename=file.filename,
                         mime_type=file.content_type or "application/octet-stream",
                         size=len(content), content=content, uploaded_by=u.id,
                         note=note.strip() or "Version initiale")
     s.add(v)
+    s.add(DocWorkflowEvent(document_id=d.id, phase="redaction", assigned_to=u.id,
+                           moved_by=u.id, note="Création du document"))
     _audit(s, u.name, "Création document", f"{name} (v1)")
     s.commit()
     return _doc_dict(s, d)
@@ -1080,6 +1140,8 @@ def delete_document(doc_id: int, u: User = Depends(require_user), s: Session = D
             raise HTTPException(403, "Seul le créateur ou un admin peut supprimer ce document")
         for v in s.exec(select(DocumentVersion).where(DocumentVersion.document_id == doc_id)).all():
             s.delete(v)
+        for w in s.exec(select(DocWorkflowEvent).where(DocWorkflowEvent.document_id == doc_id)).all():
+            s.delete(w)
         _audit(s, u.name, "Suppression document", d.name)
         s.delete(d); s.commit()
     return {"ok": True}

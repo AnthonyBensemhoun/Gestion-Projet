@@ -2863,6 +2863,7 @@ document.querySelectorAll('.side-nav .tab').forEach(t=>t.addEventListener('click
   if(!nav)return;
   // Effet dock plus vivant : amplitude, portée et rebond accrus
   const RADIUS=150, MAXSCALE=1.15, MAXSHIFT=22, MAXLIFT=4, MAXROT=8;
+  const LBL_SHIFT=30, LBL_SCALE=0.18;   // le texte suit l'icône, de façon coordonnée
   let raf=null;
   function magnify(my){
     nav.querySelectorAll('.tab').forEach(it=>{
@@ -2873,16 +2874,21 @@ document.querySelectorAll('.side-nav .tab').forEach(t=>t.addEventListener('click
       const e=t*t*(3-2*t);              // smoothstep : montée plus marquée
       const dir=my<center?-1:1;          // bascule autour du curseur
       ic.style.transform=`scale(${1+MAXSCALE*e}) translateX(${MAXSHIFT*e}px) translateY(${-MAXLIFT*e}px) rotate(${dir*MAXROT*e}deg)`;
+      // Le label se déplace et grossit de manière coordonnée avec l'icône
+      const lb=it.querySelector('.lb');
+      if(lb) lb.style.transform=`translateX(${LBL_SHIFT*e}px) translateY(${-MAXLIFT*e}px) scale(${1+LBL_SCALE*e})`;
     });
+  }
+  function resetDock(){
+    nav.querySelectorAll('.ic').forEach(ic=>ic.style.transform='');
+    nav.querySelectorAll('.lb').forEach(lb=>lb.style.transform='');
   }
   nav.addEventListener('mousemove',e=>{
     const y=e.clientY;
     if(raf)cancelAnimationFrame(raf);
     raf=requestAnimationFrame(()=>magnify(y));
   });
-  nav.addEventListener('mouseleave',()=>{
-    nav.querySelectorAll('.ic').forEach(ic=>ic.style.transform='');
-  });
+  nav.addEventListener('mouseleave',resetDock);
 })();
 
 // Filtres

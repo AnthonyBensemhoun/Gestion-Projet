@@ -213,6 +213,17 @@ kbd{font-family:'Space Grotesk',monospace;font-size:10px;background:var(--panel2
 .proj-lead-chip{font-size:11px;font-weight:600;padding:3px 9px;border-radius:99px;background:var(--panel2);border:1px solid var(--line);color:var(--mut);white-space:nowrap}
 .proj-lead-chip.mine{background:rgba(79,70,229,.1);border-color:rgba(79,70,229,.25);color:var(--acc)}
 
+/* ---- VISITE GUIDÉE ---- */
+.tour-overlay{position:fixed;inset:0;z-index:200;pointer-events:none}
+.tour-spot{position:fixed;border-radius:12px;box-shadow:0 0 0 9999px rgba(15,23,42,.6);transition:all .35s cubic-bezier(.4,0,.2,1);pointer-events:none}
+.tour-pop{position:fixed;z-index:201;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow-lg);width:300px;padding:18px;pointer-events:auto;animation:fadeIn .2s ease}
+.tour-pop.center{left:50%!important;top:50%!important;transform:translate(-50%,-50%)!important;width:400px;text-align:center}
+.tour-pop h4{margin:0 0 7px;font-size:16px;font-weight:700}
+.tour-pop p{margin:0 0 14px;font-size:13.5px;color:var(--mut);line-height:1.55}
+.tour-actions{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.tour-pop.center .tour-actions{justify-content:center}
+.tour-progress{font-size:11px;color:var(--mut);font-weight:600}
+
 @media(max-width:900px){
   .sidebar{position:fixed;left:0;top:0;transform:translateX(-100%);transition:transform var(--t-smooth);box-shadow:var(--shadow-lg)}
   .sidebar.open{transform:translateX(0)}

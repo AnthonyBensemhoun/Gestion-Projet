@@ -2756,4 +2756,68 @@ $('btnChangePw').addEventListener('click',changeMyPassword);
 [$('f_newPw'),$('f_newPw2')].forEach(inp=>inp.addEventListener('keydown',e=>{if(e.key==='Enter')changeMyPassword();}));
 if(ME.must_change_password) $('changePwModal').classList.add('show');
 
-loadAll().then(()=>{ if($('sec-me') && !$('sec-me').classList.contains('hidden')) renderMe(); });
+/* ====== Visite guidée interactive ====== */
+const TOUR_STEPS=[
+  {center:true, title:'Bienvenue dans Helix 👋', text:"Petite visite guidée pour découvrir l'application, onglet par onglet. Tu pourras la relancer à tout moment via « 🎓 Visite guidée » en bas du menu."},
+  {sel:'.side-nav .tab[data-tab="me"]', tab:'me', pos:'right', title:'🏠 Mon espace', text:"Ta page d'accueil personnelle : tes projets, tes tâches (triées par urgence) et tes documents assignés."},
+  {sel:'#meContent .me-widgets', tab:'me', pos:'top', title:'🧩 Tes widgets', text:"Personnalise ton espace : ajoute une note, une horloge, un mémo, un compte à rebours… Tout est sauvegardé sur ton compte."},
+  {sel:'.side-nav .tab[data-tab="dash"]', tab:'dash', pos:'right', title:'📊 Tableau de bord', text:"La vue d'ensemble du projet sélectionné : indicateurs clés, graphiques, avancement et alertes."},
+  {sel:'.side-nav .tab[data-tab="kpi"]', tab:'kpi', pos:'right', title:'🎯 KPI Service', text:"Le cockpit transverse : tes indicateurs consolidés sur TOUS les projets."},
+  {sel:'#btnAddProj', tab:'dash', pos:'bottom', title:'📁 Crée ton premier projet', text:"C'est ici que tout commence ! Clique sur « + Nouveau » pour créer un projet — tu en deviens le chef de projet."},
+  {sel:'#btnImportGantt', tab:'dash', pos:'bottom', title:'📥 Importer un planning', text:"Tu as déjà un planning (Gantt PDF) d'un fournisseur ? Importe-le : l'IA crée les tâches automatiquement."},
+  {sel:'.side-nav .tab[data-tab="tasks"]', tab:'tasks', pos:'right', title:'✓ Tâches', text:"Crée, suis et assigne les tâches. Les chefs de projet peuvent les assigner à d'autres (avec notification + email)."},
+  {sel:'.side-nav .tab[data-tab="docs"]', tab:'docs', pos:'right', title:'📄 Documents qualité', text:"Le circuit documentaire complet : workflow par phases, signature électronique, lecteur avec commentaires, répertoires."},
+  {sel:'#btnNotif', pos:'bottom', title:'🔔 Notifications', text:"Tu seras prévenu ici quand un document ou une tâche t'est assigné, ou quand on te mentionne."},
+  {sel:'#manualLink', pos:'right', last:true, title:'📘 Tout le détail en PowerPoint', text:"Et voilà ! Pour aller plus loin, télécharge le manuel utilisateur complet.",
+   action:'<a class="btn sm primary" href="/api/manual.pptx" style="margin-bottom:10px;display:inline-flex">📘 Télécharger le manuel</a>'},
+];
+let _tourI=0, _tourDir=1;
+function ensureTourEls(){
+  if(!$('tourOverlay')){const o=document.createElement('div');o.id='tourOverlay';o.className='tour-overlay';o.innerHTML='<div class="tour-spot" id="tourSpot"></div>';document.body.appendChild(o);}
+  if(!$('tourPop')){const p=document.createElement('div');p.id='tourPop';p.className='tour-pop';document.body.appendChild(p);}
+}
+function endTour(){['tourOverlay','tourPop'].forEach(id=>{const e=$(id);if(e)e.remove();});mePrefs.tour_done=true;saveMePrefs();}
+function startTour(){_tourI=0;_tourDir=1;ensureTourEls();showTourStep();}
+async function showTourStep(){
+  const step=TOUR_STEPS[_tourI];
+  if(!step){endTour();return;}
+  if(step.tab){tab(step.tab);if(step.tab==='me'){try{await renderMe();}catch{}}await new Promise(r=>setTimeout(r,300));}
+  const el=step.center?null:document.querySelector(step.sel);
+  if(step.sel && !el){_tourI+=_tourDir;if(_tourI<0||_tourI>=TOUR_STEPS.length){endTour();return;}return showTourStep();}
+  ensureTourEls();
+  const spot=$('tourSpot'), pop=$('tourPop');
+  if(el){el.scrollIntoView({block:'center',behavior:'smooth'});const r=el.getBoundingClientRect();const pad=8;
+    spot.style.display='block';spot.style.left=(r.left-pad)+'px';spot.style.top=(r.top-pad)+'px';spot.style.width=(r.width+pad*2)+'px';spot.style.height=(r.height+pad*2)+'px';
+  }else spot.style.display='none';
+  const isLast=step.last||_tourI===TOUR_STEPS.length-1;
+  pop.className='tour-pop'+((step.center||!el)?' center':'');
+  pop.innerHTML=`<h4>${step.title}</h4><p>${step.text}</p>${step.action||''}
+    <div class="tour-actions">
+      <span class="tour-progress">${_tourI+1}/${TOUR_STEPS.length}</span>
+      <div class="row" style="gap:6px">
+        <button class="btn sm ghost" id="tourSkip">Quitter</button>
+        ${_tourI>0?'<button class="btn sm ghost" id="tourPrev">←</button>':''}
+        <button class="btn sm primary" id="tourNext">${isLast?'Terminer ✓':'Suivant →'}</button>
+      </div>
+    </div>`;
+  if(el && !step.center){
+    const r=el.getBoundingClientRect();const pos=step.pos||'right';const pw=300,ph=pop.offsetHeight||170;
+    let left,top;
+    if(pos==='right'){left=r.right+14;top=r.top;}
+    else if(pos==='top'){left=r.left;top=r.top-ph-14;}
+    else {left=r.left;top=r.bottom+14;}
+    left=Math.max(10,Math.min(window.innerWidth-pw-10,left));
+    top=Math.max(10,Math.min(window.innerHeight-ph-10,top));
+    pop.style.left=left+'px';pop.style.top=top+'px';pop.style.transform='none';
+  }else{pop.style.left='';pop.style.top='';pop.style.transform='';}
+  $('tourNext').onclick=()=>{_tourDir=1;_tourI++;showTourStep();};
+  if($('tourPrev'))$('tourPrev').onclick=()=>{_tourDir=-1;_tourI--;showTourStep();};
+  $('tourSkip').onclick=endTour;
+}
+if($('tourBtn')) $('tourBtn').addEventListener('click',startTour);
+
+loadAll().then(async ()=>{
+  if($('sec-me') && !$('sec-me').classList.contains('hidden')){try{await renderMe();}catch{}}
+  // Visite guidée auto au tout premier usage (aucun projet + jamais vue)
+  if(state.projects.length===0 && !(mePrefs && mePrefs.tour_done)) setTimeout(startTour,500);
+});

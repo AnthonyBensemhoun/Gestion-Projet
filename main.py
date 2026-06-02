@@ -153,6 +153,13 @@ class DocAck(SQLModel, table=True):
     version: int = 0           # version accusée
     acknowledged_at: datetime = Field(default_factory=datetime.utcnow)
 
+class DocComment(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    document_id: int = Field(index=True)
+    user_id: Optional[int] = Field(default=None)
+    text: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
 class DocWorkflowEvent(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     document_id: int = Field(index=True)
@@ -1299,6 +1306,56 @@ def download_version(doc_id: int, ver_id: int,
                              media_type=v.mime_type or "application/octet-stream",
                              headers=headers)
 
+@app.get("/api/documents/{doc_id}/versions/{ver_id}/view")
+def view_version(doc_id: int, ver_id: int,
+                 u: User = Depends(require_user), s: Session = Depends(get_session)):
+    """Sert le fichier en ligne (inline) pour l'aperçu dans le navigateur (PDF, images…)."""
+    v = s.get(DocumentVersion, ver_id)
+    if not v or v.document_id != doc_id:
+        raise HTTPException(404, "Version introuvable")
+    headers = {"Content-Disposition": f"inline; filename*=UTF-8''{_urlquote(v.filename)}"}
+    return StreamingResponse(io.BytesIO(v.content),
+                             media_type=v.mime_type or "application/octet-stream",
+                             headers=headers)
+
+# ---------------- API : Commentaires de documents ----------------
+@app.get("/api/documents/{doc_id}/comments")
+def list_doc_comments(doc_id: int, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    users = {x.id: x.name for x in s.exec(select(User)).all()}
+    rows = s.exec(select(DocComment).where(DocComment.document_id == doc_id)
+                 .order_by(DocComment.created_at)).all()
+    return [{"id": c.id, "user_id": c.user_id, "author": users.get(c.user_id, "?"),
+             "text": c.text, "created_at": c.created_at.isoformat()} for c in rows]
+
+@app.post("/api/documents/{doc_id}/comments")
+def create_doc_comment(doc_id: int, data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    d = s.get(Document, doc_id)
+    if not d: raise HTTPException(404, "Document introuvable")
+    text = (data.get("text") or "").strip()
+    if not text: raise HTTPException(400, "Texte requis")
+    c = DocComment(document_id=doc_id, user_id=u.id, text=text)
+    s.add(c)
+    notified = set()
+    for mid in (data.get("mentions") or []):
+        try: mid = int(mid)
+        except (TypeError, ValueError): continue
+        if mid in notified or mid == u.id: continue
+        if s.get(User, mid):
+            _notify(s, mid, "mention", f"{u.name} t'a mentionné",
+                    f"Sur le document « {d.name} » :\n{text[:200]}",
+                    doc_id=doc_id, actor_id=u.id)
+            notified.add(mid)
+    s.commit(); s.refresh(c)
+    return {"id": c.id, "author": u.name, "text": c.text, "created_at": c.created_at.isoformat()}
+
+@app.delete("/api/doc-comments/{cid}")
+def delete_doc_comment(cid: int, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    c = s.get(DocComment, cid)
+    if c:
+        if u.role != "admin" and c.user_id != u.id: raise HTTPException(403)
+        s.delete(c); s.commit()
+    return {"ok": True}
+
 @app.post("/api/documents/{doc_id}/lock")
 def lock_document(doc_id: int, u: User = Depends(require_user), s: Session = Depends(get_session)):
     d = s.get(Document, doc_id)
@@ -1350,6 +1407,8 @@ def delete_document(doc_id: int, u: User = Depends(require_user), s: Session = D
             s.delete(sg)
         for a in s.exec(select(DocAck).where(DocAck.document_id == doc_id)).all():
             s.delete(a)
+        for cm in s.exec(select(DocComment).where(DocComment.document_id == doc_id)).all():
+            s.delete(cm)
         _audit(s, u.name, "Suppression document", d.name)
         s.delete(d); s.commit()
     return {"ok": True}

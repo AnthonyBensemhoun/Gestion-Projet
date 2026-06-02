@@ -938,7 +938,7 @@ async function toggleNotifDropdown(){
     try{await api('/api/notifications/read',{method:'POST',body:{id:parseInt(id,10)}});}catch{}
     dd.classList.add('hidden');
     await loadNotifications();renderNotifBell();
-    if(docId){tab('docs');openDocDetail(docId);}
+    if(docId){tab('docs');openDocViewer(docId);}
     else if(taskId){openTask(taskId);}
   }));
   const ra=$('notifReadAll');
@@ -1270,19 +1270,138 @@ async function renderMe(){
     </div>`;
   }).join('')||'<div class="empty">Aucun document chez toi</div>';
 
-  el.innerHTML=hero+kpis+`<div class="kpi-grid2">
+  el.innerHTML=hero+kpis+meWidgetsHtml()+`<div class="kpi-grid2" style="margin-top:18px">
     <div class="panel"><div class="sec-h" style="margin-bottom:8px"><h2 style="font-size:15px">✓ Mes tâches (${myTasks.length})</h2></div>
       <div style="max-height:420px;overflow:auto">${taskRows}</div></div>
     <div class="panel"><div class="sec-h" style="margin-bottom:8px"><h2 style="font-size:15px">📄 Mes documents (${myDocs.length})</h2></div>
       <div style="max-height:420px;overflow:auto">${docRows}</div></div>
   </div>`;
 
+  wireMeWidgets();
   el.querySelectorAll('[data-countup]').forEach(node=>{
     const target=parseFloat(node.dataset.countup)||0;const start=performance.now();const dur=750;
     function step(now){const pr=Math.min(1,(now-start)/dur);node.textContent=Math.round(target*(1-Math.pow(1-pr,3)));if(pr<1)requestAnimationFrame(step);}
     requestAnimationFrame(step);
   });
 }
+
+/* ====== Widgets personnalisables de Mon espace ====== */
+const ME_WIDGET_DEFS={
+  clock:{ic:'🕐',label:'Horloge'},
+  note:{ic:'📝',label:'Note'},
+  memo:{ic:'✅',label:'Mémo perso'},
+  quickactions:{ic:'⚡',label:'Actions rapides'},
+  absents:{ic:'🌴',label:'Absents aujourd’hui'},
+  countdown:{ic:'⏳',label:'Compte à rebours'},
+  quote:{ic:'💡',label:'Inspiration'},
+};
+const ME_QUOTES=['La qualité n’est jamais un accident ; c’est le résultat d’un effort intelligent.',
+  'Ce qui se mesure s’améliore.','Un objectif sans plan n’est qu’un souhait.',
+  'Le mieux est l’ami du bien — avance par petites étapes.','La discipline est le pont entre les objectifs et les réalisations.',
+  'Fais-le bien du premier coup : c’est le moins cher.'];
+let _meClock=null;
+function getMeWidgets(){try{const v=JSON.parse(localStorage.getItem('helix_me_widgets'));if(Array.isArray(v))return v.filter(k=>ME_WIDGET_DEFS[k]);}catch{}return ['clock','note','quickactions'];}
+function setMeWidgets(arr){localStorage.setItem('helix_me_widgets',JSON.stringify(arr));}
+function meWidgetsHtml(){
+  const active=getMeWidgets();
+  const cards=active.map(meWidgetCard).join('');
+  const avail=Object.keys(ME_WIDGET_DEFS).filter(k=>!active.includes(k));
+  const addBtn=avail.length?`<button class="btn sm" id="meAddWidget">+ Ajouter un widget</button>`:'';
+  return `<div class="sec-h" style="margin:6px 0 10px;position:relative">
+      <h2 style="font-size:16px">🧩 Mes widgets</h2>${addBtn}
+      <div id="meWidgetMenu" class="me-widget-menu hidden"></div>
+    </div>
+    <div class="me-widgets">${cards||'<div class="empty">Aucun widget — clique « + Ajouter un widget ».</div>'}</div>`;
+}
+function meWidgetCard(k){
+  const def=ME_WIDGET_DEFS[k];if(!def)return '';
+  return `<div class="me-widget" data-widget="${k}">
+    <div class="me-widget-head"><span>${def.ic} ${def.label}</span><button class="x" data-rm-widget="${k}" title="Retirer">✕</button></div>
+    <div class="me-widget-body">${meWidgetBody(k)}</div>
+  </div>`;
+}
+function meWidgetBody(k){
+  if(k==='clock') return `<div class="mw-clock" id="mwClock">—</div>`;
+  if(k==='note') return `<textarea class="mw-note" id="mwNote" placeholder="Tes notes perso…">${esc(localStorage.getItem('helix_me_note')||'')}</textarea>`;
+  if(k==='memo'){const items=meMemoGet();return `<div class="mw-memo-list" id="mwMemoList">${meMemoRows(items)}</div>
+    <div class="row" style="gap:5px;margin-top:6px"><input id="mwMemoInput" class="mw-memo-input" placeholder="Ajouter…"><button class="btn sm" id="mwMemoAdd">+</button></div>`;}
+  if(k==='quickactions') return `<div class="mw-actions">
+    <button class="btn sm" id="mwActTask">➕ Nouvelle tâche</button>
+    <button class="btn sm" id="mwActDoc">📄 Nouveau document</button>
+    <button class="btn sm ghost" id="mwActSearch">🔍 Rechercher</button></div>`;
+  if(k==='absents'){
+    const list=state.users.filter(u=>isAbsentNow(u.id));
+    return list.length?list.map(u=>{const a=state.absences.find(x=>x.user_id===u.id&&x.from_date<=today()&&x.to_date>=today());
+      return `<div class="mw-abs-row"><span class="ava" style="width:22px;height:22px;font-size:9px;background:${avaColor(u.id)}">${initials(u.name)}</span><span>${esc(u.name)}</span><span class="meta" style="margin-left:auto;font-size:11px">${a?esc(a.kind):''}</span></div>`;}).join('')
+      :'<div class="meta" style="font-size:13px">Personne absente aujourd’hui 🎉</div>';
+  }
+  if(k==='countdown'){const tgt=localStorage.getItem('helix_me_countdown')||'';
+    return `<input type="date" id="mwCdDate" value="${tgt}" class="mw-cd-date"><div class="mw-cd-out" id="mwCdOut"></div>`;}
+  if(k==='quote'){const q=ME_QUOTES[Math.floor(Math.random()*ME_QUOTES.length)];return `<div class="mw-quote">« ${esc(q)} »</div>`;}
+  return '';
+}
+function meMemoGet(){try{const v=JSON.parse(localStorage.getItem('helix_me_memo'));if(Array.isArray(v))return v;}catch{}return [];}
+function meMemoSet(v){localStorage.setItem('helix_me_memo',JSON.stringify(v));}
+function meMemoRows(items){return items.length?items.map((it,i)=>`<label class="mw-memo-item${it.done?' done':''}"><input type="checkbox" data-memo-i="${i}" ${it.done?'checked':''}><span>${esc(it.t)}</span><button class="x" data-memo-del="${i}">✕</button></label>`).join(''):'<div class="meta" style="font-size:12px">Aucune tâche perso.</div>';}
+function wireMeWidgets(){
+  // Ajouter / retirer
+  const addBtn=$('meAddWidget');
+  if(addBtn) addBtn.addEventListener('click',e=>{
+    e.stopPropagation();
+    const menu=$('meWidgetMenu');
+    const active=getMeWidgets();
+    const avail=Object.keys(ME_WIDGET_DEFS).filter(k=>!active.includes(k));
+    menu.innerHTML=avail.map(k=>`<div class="me-widget-opt" data-add-widget="${k}">${ME_WIDGET_DEFS[k].ic} ${ME_WIDGET_DEFS[k].label}</div>`).join('');
+    menu.classList.toggle('hidden');
+    menu.querySelectorAll('[data-add-widget]').forEach(o=>o.addEventListener('click',()=>{
+      const arr=getMeWidgets();arr.push(o.dataset.addWidget);setMeWidgets(arr);renderMe();
+    }));
+  });
+  document.querySelectorAll('[data-rm-widget]').forEach(b=>b.addEventListener('click',()=>{
+    setMeWidgets(getMeWidgets().filter(k=>k!==b.dataset.rmWidget));renderMe();
+  }));
+  // Horloge
+  if(_meClock){clearInterval(_meClock);_meClock=null;}
+  if($('mwClock')){
+    const upd=()=>{const el=$('mwClock');if(!el){clearInterval(_meClock);return;}const n=new Date();
+      el.innerHTML=`<div class="mw-time">${n.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</div><div class="mw-date">${n.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})}</div>`;};
+    upd();_meClock=setInterval(upd,1000);
+  }
+  // Note
+  const note=$('mwNote');
+  if(note) note.addEventListener('input',()=>localStorage.setItem('helix_me_note',note.value));
+  // Mémo
+  const memoAdd=$('mwMemoAdd'), memoInp=$('mwMemoInput');
+  function refreshMemo(){const l=$('mwMemoList');if(l)l.innerHTML=meMemoRows(meMemoGet());wireMemo();}
+  function wireMemo(){
+    document.querySelectorAll('[data-memo-i]').forEach(cb=>cb.addEventListener('change',function(){const v=meMemoGet();if(v[this.dataset.memoI]){v[this.dataset.memoI].done=this.checked;meMemoSet(v);refreshMemo();}}));
+    document.querySelectorAll('[data-memo-del]').forEach(b=>b.addEventListener('click',function(){const v=meMemoGet();v.splice(this.dataset.memoDel,1);meMemoSet(v);refreshMemo();}));
+  }
+  if(memoAdd&&memoInp){
+    const add=()=>{const t=memoInp.value.trim();if(!t)return;const v=meMemoGet();v.push({t,done:false});meMemoSet(v);memoInp.value='';refreshMemo();};
+    memoAdd.addEventListener('click',add);
+    memoInp.addEventListener('keydown',e=>{if(e.key==='Enter')add();});
+    wireMemo();
+  }
+  // Actions rapides
+  if($('mwActTask')) $('mwActTask').addEventListener('click',()=>openTask());
+  if($('mwActDoc')) $('mwActDoc').addEventListener('click',()=>{tab('docs');openDocCreate();});
+  if($('mwActSearch')) $('mwActSearch').addEventListener('click',openSearch);
+  // Compte à rebours
+  const cd=$('mwCdDate');
+  if(cd){
+    const out=$('mwCdOut');
+    const upd=()=>{const v=cd.value;if(!v){out.innerHTML='<span class="meta" style="font-size:12px">Choisis une date cible</span>';return;}
+      const dd=daysBetween(today(),v);
+      out.innerHTML=dd>0?`<div class="mw-cd-num">${dd}</div><div class="meta">jour(s) restant(s)</div>`
+        :dd===0?'<div class="mw-cd-num" style="color:var(--warn)">Aujourd’hui !</div>'
+        :`<div class="mw-cd-num" style="color:var(--bad)">${Math.abs(dd)}</div><div class="meta">jour(s) de retard</div>`;};
+    cd.addEventListener('change',()=>{localStorage.setItem('helix_me_countdown',cd.value);upd();});
+    upd();
+  }
+}
+// Ferme le menu d'ajout de widget au clic extérieur
+document.addEventListener('click',e=>{const m=$('meWidgetMenu');if(m&&!m.classList.contains('hidden')&&!e.target.closest('#meWidgetMenu')&&e.target.id!=='meAddWidget')m.classList.add('hidden');});
 
 /* ====== KPI de service (cockpit transverse) ====== */
 function kpiCard(ic,label,value,suffix,variant,raw){
@@ -1701,6 +1820,147 @@ async function ackDoc(){
   }catch(e){toast(e.message,'err');}
 }
 
+/* ====== Lecteur de document (aperçu + commentaires, façon Veeva) ====== */
+function refreshDocViews(id){
+  if($('docViewerModal').classList.contains('show')) openDocViewer(id);
+  if($('docDetailModal').classList.contains('show')) openDocDetail(id);
+  renderDocs();
+}
+async function openDocViewer(docId){
+  currentDocId=parseInt(docId,10);
+  $('docViewerModal').classList.add('show');
+  $('dvTitle').innerHTML='<div class="meta">Chargement…</div>';
+  $('dvPreview').innerHTML='';$('dvSide').innerHTML='';
+  let d;
+  try{d=await api('/api/documents/'+currentDocId);}
+  catch(e){$('dvPreview').innerHTML='<div class="empty">Erreur : '+esc(e.message)+'</div>';return;}
+  currentDocObj=d;
+  const cur=d.versions[0];
+  const ph=DOC_PHASE_BY_KEY[d.phase||'redaction']||{ic:'',label:d.phase,color:'var(--mut)'};
+  $('dvTitle').innerHTML=`<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+    ${d.reference?`<span class="doc-ref">${esc(d.reference)}</span>`:''}
+    <strong style="font-size:15px">📄 ${esc(d.name)}</strong>
+    <span class="pill" style="background:${ph.color};color:#fff;font-size:10px">${ph.ic} ${ph.label}</span>
+    <span class="meta" style="font-size:11px">v${d.last_version}</span>
+    ${d.sla_over?`<span class="doc-sla-badge">⏱ SLA dépassé</span>`:''}
+  </div>`;
+  renderDocPreview(d, cur);
+  renderDocViewerSide(d, cur);
+  loadDocComments();
+}
+async function renderDocPreview(d, cur){
+  const pv=$('dvPreview');
+  if(!cur){pv.innerHTML='<div class="empty">Aucun fichier</div>';return;}
+  const name=(cur.filename||'').toLowerCase();
+  const ext=name.split('.').pop();
+  const viewUrl='/api/documents/'+d.id+'/versions/'+cur.id+'/view';
+  const dlUrl='/api/documents/'+d.id+'/versions/'+cur.id+'/download';
+  if(name.endsWith('.pdf')){
+    pv.innerHTML=`<iframe class="dv-frame" src="${viewUrl}#toolbar=1"></iframe>`;
+  }else if(name.endsWith('.docx')){
+    pv.innerHTML='<div class="dv-loading">Rendu du document…</div>';
+    try{
+      const blob=await (await fetch(viewUrl)).blob();
+      pv.innerHTML=`<div class="dv-note">ℹ️ Aperçu web — la mise en forme exacte peut différer. <a href="${dlUrl}">Télécharger l'original</a> pour la version officielle.</div><div class="dv-docx" id="dvDocx"></div>`;
+      if(window.docx&&docx.renderAsync){
+        await docx.renderAsync(blob, $('dvDocx'), null, {inWrapper:true, className:'docx', ignoreWidth:false});
+      }else{
+        $('dvDocx').innerHTML=`<div class="empty">Lecteur DOCX indisponible. <a href="${dlUrl}">Télécharger</a></div>`;
+      }
+    }catch(e){
+      pv.innerHTML=`<div class="dv-noprev"><div style="font-size:42px">📄</div><p>Aperçu impossible.</p><a class="btn primary" href="${dlUrl}">⬇ Télécharger le document</a></div>`;
+    }
+  }else if(/\.(txt|md|csv)$/.test(name)){
+    try{const txt=await (await fetch(viewUrl)).text();const pre=document.createElement('pre');pre.className='dv-text';pre.textContent=txt;pv.innerHTML='';pv.appendChild(pre);}
+    catch{pv.innerHTML=`<div class="dv-noprev"><a class="btn primary" href="${dlUrl}">⬇ Télécharger</a></div>`;}
+  }else{
+    pv.innerHTML=`<div class="dv-noprev">
+      <div style="font-size:48px">📄</div>
+      <p>Aperçu non disponible pour ce format (.${esc(ext)}).<br>Word/Excel/PowerPoint s'ouvrent dans l'application bureautique.</p>
+      <a class="btn primary" href="${dlUrl}">⬇ Télécharger le document</a>
+    </div>`;
+  }
+}
+function renderDocViewerSide(d, cur){
+  const isLockedByMe=d.locked_by===ME.id;
+  const dlUrl=cur?'/api/documents/'+d.id+'/versions/'+cur.id+'/download':'';
+  let actions='';
+  if(cur) actions+=`<a class="btn sm" href="${dlUrl}">⬇ Télécharger</a>`;
+  if(!d.locked_by) actions+=`<button class="btn sm primary" data-doc-lock="${d.id}">🔒 Verrouiller / éditer</button>`;
+  else if(isLockedByMe) actions+=`<button class="btn sm primary" id="dvUpload">⬆ Nouvelle version</button><button class="btn sm ghost" data-doc-unlock="${d.id}">Libérer</button>`;
+  else actions+=`<span class="pill" style="background:rgba(220,38,38,.12);color:var(--bad)">🔒 ${esc(d.locked_by_name||'?')}</span>${IS_ADMIN?`<button class="btn sm ghost" data-doc-unlock="${d.id}">Forcer (admin)</button>`:''}`;
+  actions+=`<button class="btn sm ghost" id="dvWorkflow">⚙ Workflow & signatures</button>`;
+  const lockMsg=isLockedByMe?'<div class="meta" style="font-size:12px;margin-top:6px">💡 Verrouillé par toi : télécharge, édite dans Word, puis « Nouvelle version ».</div>':'';
+  // Historique du document : transitions de workflow + versions, fusionnés et triés
+  const hist=[];
+  (d.workflow||[]).forEach(w=>{const ph=DOC_PHASE_BY_KEY[w.phase]||{ic:'•',label:w.phase};
+    hist.push({t:w.created_at, ic:ph.ic, txt:`<strong>${esc(ph.label)}</strong>${w.assigned_to_name?' → '+esc(w.assigned_to_name):''}`, by:w.moved_by_name, note:w.note});});
+  (d.versions||[]).forEach(v=>hist.push({t:v.uploaded_at, ic:'📄', txt:`Version <strong>v${v.version}</strong> uploadée`, by:v.uploaded_by_name, note:v.note}));
+  (d.signatures||[]).forEach(sg=>hist.push({t:sg.signed_at, ic:'✒️', txt:`Signé : <strong>${esc(sg.meaning)}</strong>`, by:sg.user_name, note:sg.reason}));
+  hist.sort((a,b)=>(a.t||'')<(b.t||'')?1:-1);
+  const histHtml=hist.slice(0,12).map(h=>`<div class="dv-hist-item">
+    <span class="dv-hist-ic">${h.ic}</span>
+    <div style="flex:1;min-width:0"><div style="font-size:12px">${h.txt}</div>
+      <div class="meta" style="font-size:10.5px">${esc(h.by||'?')} · ${fmtAgo(h.t)}${h.note?' · '+esc(h.note):''}</div></div>
+  </div>`).join('')||'<div class="empty" style="font-size:12px">Aucune activité</div>';
+
+  $('dvSide').innerHTML=`
+    <div class="dv-side-head">
+      <div class="meta" style="font-size:12px">${d.assigned_to_name?'Chez <strong>'+esc(d.assigned_to_name)+'</strong>':'Non assigné'}</div>
+    </div>
+    <div class="dv-actions">${actions}</div>
+    ${lockMsg}
+    <h3 style="font-size:14px;margin:16px 0 6px">💬 Commentaires</h3>
+    <div id="dvComments" class="dv-comments"><div class="empty" style="font-size:12px">Chargement…</div></div>
+    <div class="dv-comment-input">
+      <input id="dvCommentInput" placeholder="Commenter…  (@ pour mentionner)" autocomplete="off">
+      <button class="btn sm primary" id="dvCommentSend">Envoyer</button>
+    </div>
+    <h3 style="font-size:14px;margin:18px 0 6px">🗂 Historique du document</h3>
+    <div class="dv-history">${histHtml}</div>`;
+  const up=$('dvUpload'); if(up) up.addEventListener('click',()=>$('docVersionFile').click());
+  const wf=$('dvWorkflow'); if(wf) wf.addEventListener('click',()=>{closeModal('docViewerModal');openDocDetail(d.id);});
+  const send=$('dvCommentSend'); if(send) send.addEventListener('click',addDocComment);
+  const inp=$('dvCommentInput');
+  if(inp){
+    inp.addEventListener('keydown',e=>{
+      if(e.key==='Enter'){ if(_mentionBox && !_mentionBox.classList.contains('hidden'))return; e.preventDefault(); addDocComment(); }
+    });
+    inp.addEventListener('input',function(){showMentionBox(this);});
+    inp.addEventListener('blur',()=>setTimeout(hideMentionBox,150));
+  }
+}
+async function loadDocComments(){
+  if(!currentDocId)return;
+  try{const cs=await api('/api/documents/'+currentDocId+'/comments');renderDocCommentList(cs);}
+  catch{const el=$('dvComments');if(el)el.innerHTML='<div class="empty" style="font-size:12px">Erreur de chargement</div>';}
+}
+function renderDocCommentList(cs){
+  const el=$('dvComments');if(!el)return;
+  el.innerHTML=cs.length?cs.map(c=>`<div class="dv-comment">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <strong style="font-size:12.5px">${esc(c.author)}</strong>
+      <div class="row" style="gap:6px"><span class="meta" style="font-size:11px">${fmtAgo(c.created_at)}</span>${(IS_ADMIN||c.user_id===ME.id)?`<button class="x" style="font-size:11px" data-del-doccomment="${c.id}">✕</button>`:''}</div>
+    </div>
+    <div style="font-size:13px;margin-top:2px">${highlightMentions(esc(c.text))}</div>
+  </div>`).join(''):'<div class="empty" style="font-size:12px">Aucun commentaire. Lance la discussion 💬</div>';
+  el.querySelectorAll('[data-del-doccomment]').forEach(b=>b.addEventListener('click',async function(){
+    try{await api('/api/doc-comments/'+this.dataset.delDoccomment,{method:'DELETE'});loadDocComments();}catch(e){toast(e.message,'err');}
+  }));
+  el.scrollTop=el.scrollHeight;
+}
+async function addDocComment(){
+  const inp=$('dvCommentInput');if(!inp)return;
+  const text=inp.value.trim();if(!text||!currentDocId)return;
+  try{
+    const mentions=extractMentions(text);
+    await api('/api/documents/'+currentDocId+'/comments',{method:'POST',body:{text,mentions}});
+    inp.value='';hideMentionBox();
+    loadDocComments();
+    if(mentions.length){toast(`${mentions.length} personne(s) notifiée(s)`);await loadNotifications();renderNotifBell();}
+  }catch(e){toast(e.message,'err');}
+}
+
 async function docTransition(){
   if(!currentDocId)return;
   const phase=$('f_docPhase').value;
@@ -1746,8 +2006,7 @@ async function uploadNewVersion(file){
     const r=await fetch('/api/documents/'+currentDocId+'/versions',{method:'POST',body:fd});
     if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.detail||'Erreur '+r.status);}
     toast('Nouvelle version enregistrée');
-    openDocDetail(currentDocId);
-    renderDocs();
+    refreshDocViews(currentDocId);
   }catch(e){toast(e.message,'err');}
 }
 
@@ -1775,11 +2034,11 @@ async function saveDoc(){
 }
 
 async function lockDoc(id){
-  try{await api('/api/documents/'+id+'/lock',{method:'POST',body:{}});openDocDetail(id);renderDocs();}
+  try{await api('/api/documents/'+id+'/lock',{method:'POST',body:{}});refreshDocViews(id);}
   catch(e){toast(e.message,'err');}
 }
 async function unlockDoc(id){
-  try{await api('/api/documents/'+id+'/unlock',{method:'POST',body:{}});openDocDetail(id);renderDocs();}
+  try{await api('/api/documents/'+id+'/unlock',{method:'POST',body:{}});refreshDocViews(id);}
   catch(e){toast(e.message,'err');}
 }
 async function deleteDoc(id){
@@ -1971,7 +2230,7 @@ document.addEventListener('click',function(e){
   else if(t.hasAttribute('data-ack'))ackAlert(t.dataset.ack);
   else if(t.hasAttribute('data-remind-person'))remindPerson(parseInt(t.dataset.remindPerson,10));
   else if(t.hasAttribute('data-remind-login'))remindLogin(t.dataset.remindLogin);
-  else if(t.hasAttribute('data-open-doc'))openDocDetail(t.dataset.openDoc);
+  else if(t.hasAttribute('data-open-doc'))openDocViewer(t.dataset.openDoc);
   else if(t.hasAttribute('data-doc-lock'))lockDoc(t.dataset.docLock);
   else if(t.hasAttribute('data-doc-unlock'))unlockDoc(t.dataset.docUnlock);
   else if(t.hasAttribute('data-doc-delete'))deleteDoc(t.dataset.docDelete);

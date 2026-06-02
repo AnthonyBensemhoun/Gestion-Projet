@@ -369,8 +369,22 @@ window.CURRENT_USER = {
 </div></div>
 <input type="file" id="docVersionFile" accept=".docx,.doc,.pdf,.xlsx,.xls,.pptx,.ppt,.txt,.md,.csv" class="hidden">
 
+<!-- Lecteur de document (façon Veeva) : aperçu + commentaires -->
+<div class="modal-bg" id="docViewerModal"><div class="doc-viewer">
+  <div class="doc-viewer-head">
+    <div id="dvTitle" style="min-width:0"></div>
+    <button class="btn ghost sm" data-close="docViewerModal">✕ Fermer</button>
+  </div>
+  <div class="doc-viewer-body">
+    <div class="doc-viewer-preview" id="dvPreview"></div>
+    <div class="doc-viewer-side" id="dvSide"></div>
+  </div>
+</div></div>
+
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.5/dist/docx-preview.min.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

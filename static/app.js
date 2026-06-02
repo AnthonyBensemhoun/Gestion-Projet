@@ -2621,7 +2621,8 @@ document.querySelectorAll('.side-nav .tab').forEach(t=>t.addEventListener('click
 (function(){
   const nav=document.querySelector('.side-nav');
   if(!nav)return;
-  const RADIUS=96, MAXSCALE=0.55, MAXSHIFT=10;
+  // Effet dock plus vivant : amplitude, portée et rebond accrus
+  const RADIUS=150, MAXSCALE=1.15, MAXSHIFT=22, MAXLIFT=4, MAXROT=8;
   let raf=null;
   function magnify(my){
     nav.querySelectorAll('.tab').forEach(it=>{
@@ -2629,8 +2630,9 @@ document.querySelectorAll('.side-nav .tab').forEach(t=>t.addEventListener('click
       const r=it.getBoundingClientRect();
       const center=r.top+r.height/2;
       const t=Math.max(0,1-Math.abs(my-center)/RADIUS);
-      const e=t*t;  // falloff doux
-      ic.style.transform=`scale(${1+MAXSCALE*e}) translateX(${MAXSHIFT*e}px)`;
+      const e=t*t*(3-2*t);              // smoothstep : montée plus marquée
+      const dir=my<center?-1:1;          // bascule autour du curseur
+      ic.style.transform=`scale(${1+MAXSCALE*e}) translateX(${MAXSHIFT*e}px) translateY(${-MAXLIFT*e}px) rotate(${dir*MAXROT*e}deg)`;
     });
   }
   nav.addEventListener('mousemove',e=>{

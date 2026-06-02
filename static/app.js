@@ -550,14 +550,17 @@ function fillSelects(){
   // Pour la tâche : assignés = utilisateurs
   $('f_assignee').innerHTML='<option value="">— Non assigné —</option>'+state.users.map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('');
   $('f_aPerson').innerHTML=state.users.map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('');
-  // Pour les non-admin, l'assigné est verrouillé sur eux-mêmes
-  if(!IS_ADMIN){
+  // L'assigné est verrouillé sur soi-même sauf pour admin / Team Leader
+  if(!CAN_PROJECTS){
     $('f_assignee').value=ME.id;
     $('f_assignee').disabled=true;
-    if(state.users.find(u=>u.id===ME.id)){
-      $('f_aPerson').value=ME.id;
-      $('f_aPerson').disabled=true;
-    }
+  }else{
+    $('f_assignee').disabled=false;
+  }
+  // Les absences restent gérées pour soi-même hors admin
+  if(!IS_ADMIN && state.users.find(u=>u.id===ME.id)){
+    $('f_aPerson').value=ME.id;
+    $('f_aPerson').disabled=true;
   }
 }
 
@@ -602,8 +605,8 @@ function openTask(id){
     $('f_assignee').value=t.assignee_id||'';$('f_prio').value=t.priority;
     $('f_start').value=t.start_date||'';$('f_due').value=t.due_date||'';
     $('f_status').value=t.status;$('f_prog').value=t.progress||0;$('f_progVal').textContent=t.progress||0;
-    $('f_taskProjectWrap').classList.toggle('hidden',!IS_ADMIN);
-    if(IS_ADMIN) $('f_taskProject').value=t.project_id;
+    $('f_taskProjectWrap').classList.toggle('hidden',!CAN_PROJECTS);
+    if(CAN_PROJECTS) $('f_taskProject').value=t.project_id;
     $('f_estHours').value=t.estimated_hours||'';
     $('f_actHours').value=t.actual_hours||'';
     fillMilestoneSelect();$('f_milestone').value=t.milestone_id||'';
@@ -615,7 +618,7 @@ function openTask(id){
     currentTaskTags=[];fillMilestoneSelect();fillMilestoneSelect();
     $('taskModalTitle').textContent='Nouvelle tâche';
     $('f_taskId').value='';$('f_title').value='';$('f_desc').value='';
-    $('f_assignee').value=IS_ADMIN?'':ME.id;
+    $('f_assignee').value=CAN_PROJECTS?'':ME.id;
     $('f_prio').value='m';$('f_start').value=today();$('f_due').value='';
     $('f_status').value='todo';$('f_prog').value=0;$('f_progVal').textContent='0';
     $('f_taskProjectWrap').classList.remove('hidden');
@@ -640,17 +643,32 @@ async function saveTask(){
   };
   const existId=$('f_taskId').value;
   try{
+    let r;
     if(existId){
-      if(IS_ADMIN) data.project_id=parseInt($('f_taskProject').value,10);
-      await api('/api/tasks/'+existId,{method:'PUT',body:data});
+      if(CAN_PROJECTS) data.project_id=parseInt($('f_taskProject').value,10);
+      r=await api('/api/tasks/'+existId,{method:'PUT',body:data});
       toast('Tâche mise à jour');
     }else{
       data.project_id=parseInt($('f_taskProject').value,10);
-      await api('/api/tasks',{method:'POST',body:data});
+      r=await api('/api/tasks',{method:'POST',body:data});
       toast('Tâche créée');
     }
-    closeModal('taskModal');await loadAll();
+    closeModal('taskModal');
+    // Si la tâche vient d'être assignée à quelqu'un d'autre → notif + email Outlook
+    if(r&&r.assignee_email){
+      await loadNotifications();renderNotifBell();
+      notifyTaskAssignee(r,data);
+    }
+    await loadAll();
   }catch(e){toast(e.message,'err');}
+}
+function notifyTaskAssignee(r,data){
+  const first=(r.assignee_name||'').split(' ')[0];
+  const appUrl=window.location.origin;
+  const due=data.due_date?`\nÉchéance : ${fmtDate(data.due_date)}`:'';
+  const subject=`[${document.title}] Tâche assignée : ${data.title}`;
+  const body=`Bonjour ${first},\n\n${ME.name} t'a assigné la tâche suivante${r.assigned_project?` sur le projet « ${r.assigned_project} »`:''} :\n\n• ${data.title}${data.description?'\n  '+data.description:''}${due}\n• Priorité : ${PRIO_LABEL[data.priority]||data.priority}\n\nAccède à l'application :\n${appUrl}\n\nMerci,\n${ME.name}`;
+  window.location.href='mailto:'+encodeURIComponent(r.assignee_email)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
 }
 async function delTask(id){
   if(!confirm('Supprimer cette tâche ?'))return;

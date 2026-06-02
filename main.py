@@ -571,8 +571,10 @@ def create_task(data: dict, u: User = Depends(require_user), s: Session = Depend
     if not pid or not s.get(Project, pid):
         raise HTTPException(400, "Projet invalide")
     assignee = data.get("assignee_id")
-    # Si non admin : assignation forcée à soi-même
-    if u.role != "admin":
+    # Seuls admin et Team Leader peuvent assigner à quelqu'un d'autre ; sinon forcé sur soi-même
+    if u.role not in ("admin", "lead"):
+        assignee = u.id
+    if assignee and not s.get(User, assignee):
         assignee = u.id
     t = Task(
         project_id=pid, title=title,
@@ -585,10 +587,31 @@ def create_task(data: dict, u: User = Depends(require_user), s: Session = Depend
     )
     _audit(s, u.name, "Création tâche", f"'{title}' — projet {pid}")
     s.add(t); s.commit(); s.refresh(t)
-    return task_dict(t)
+    out = task_dict(t)
+    out.update(_notify_task_assignment(s, t, None, u))
+    s.commit()
+    return out
 
 def _can_edit_task(u: User, t: Task) -> bool:
-    return u.role == "admin" or t.assignee_id == u.id
+    return u.role in ("admin", "lead") or t.assignee_id == u.id
+
+def _notify_task_assignment(s: Session, t: Task, old_assignee, actor: User) -> dict:
+    """Notifie (in-app) la personne nouvellement assignée à une tâche.
+    Renvoie l'email/nom du destinataire pour l'envoi mailto côté client."""
+    new_a = t.assignee_id
+    if not new_a or new_a == old_assignee or new_a == actor.id:
+        return {}
+    target = s.get(User, new_a)
+    if not target:
+        return {}
+    proj = s.get(Project, t.project_id)
+    _notify(s, new_a, "task_assigned", f"Tâche assignée : {t.title}",
+            f"{actor.name} t'a assigné la tâche « {t.title} »"
+            + (f" (projet {proj.name})" if proj else "")
+            + (f" — échéance {t.due_date.isoformat()}" if t.due_date else "") + ".",
+            task_id=t.id, actor_id=actor.id)
+    return {"assignee_email": target.email, "assignee_name": target.name,
+            "assigned_project": proj.name if proj else None}
 
 @app.put("/api/tasks/{tid}")
 def update_task(tid: int, data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
@@ -596,8 +619,9 @@ def update_task(tid: int, data: dict, u: User = Depends(require_user), s: Sessio
     if not t: raise HTTPException(404)
     if not _can_edit_task(u, t):
         raise HTTPException(403, "Tu ne peux modifier que tes propres tâches")
-    # Les non-admins ne peuvent pas changer l'assignation ni le projet
-    if u.role != "admin":
+    old_assignee = t.assignee_id
+    # Seuls admin et Team Leader peuvent changer l'assignation ou le projet
+    if u.role not in ("admin", "lead"):
         data.pop("assignee_id", None)
         data.pop("project_id", None)
     for k in ("title", "description", "priority", "status"):
@@ -616,8 +640,11 @@ def update_task(tid: int, data: dict, u: User = Depends(require_user), s: Sessio
     # toute mise à jour invalide les acquittements liés à cette tâche
     for ack in s.exec(select(AckedAlert).where(AckedAlert.alert_key.endswith(f":{tid}"))).all():
         s.delete(ack)
+    s.refresh(t)
+    out = task_dict(t)
+    out.update(_notify_task_assignment(s, t, old_assignee, u))
     s.commit()
-    return task_dict(t)
+    return out
 
 @app.delete("/api/tasks/{tid}")
 def delete_task(tid: int, u: User = Depends(require_user), s: Session = Depends(get_session)):
@@ -1717,6 +1744,139 @@ def gantt_apply(pid: int, data: dict, u: User = Depends(require_user), s: Sessio
     _audit(s, u.name, "Import planning (Gantt)", f"{proj.name} — {created} tâche(s)")
     s.commit()
     return {"ok": True, "created": created}
+
+# ---------------- API : Manuel utilisateur (PowerPoint) ----------------
+MANUAL_FEATURES = [
+    ("Mon espace", "Ton tableau de bord personnel", [
+        "Page d'accueil à la connexion : tout ce qui te concerne.",
+        "Mes projets, mes tâches (triées par urgence), mes documents assignés.",
+        "Widgets personnalisables : note, horloge, mémo, compte à rebours, absents du jour…",
+        "Synchronisé sur ton compte : tu retrouves tout sur n'importe quel poste."]),
+    ("Tableau de bord projet", "Vue d'ensemble du projet sélectionné", [
+        "Indicateurs clés : tâches, en cours, terminées, en retard, avancement.",
+        "Répartition des statuts et charge par membre (graphiques).",
+        "Avancement par tâche et alertes actives."]),
+    ("KPI Service", "Cockpit transverse, tous projets", [
+        "10 indicateurs consolidés (complétion, retards, charge, docs prêts QMS…).",
+        "Avancement par projet, workflow documentaire, charge par membre.",
+        "Échéances à venir sur 7 jours, compteurs animés."]),
+    ("Synthèse & Gantt", "Planning visuel du projet", [
+        "Diagramme de Gantt des tâches avec dépendances temporelles.",
+        "Jalons et avancement pondéré.",
+        "Santé du projet en un coup d'œil."]),
+    ("Tâches", "Création, suivi et assignation", [
+        "Statut, priorité, échéance, estimation, sous-tâches, étiquettes.",
+        "Commentaires avec @mentions (notification de la personne citée).",
+        "Les admins et Team Leaders assignent à d'autres → email + notification automatiques."]),
+    ("Kanban / Liste / Calendrier", "Plusieurs façons de visualiser", [
+        "Kanban : glisser-déposer les cartes entre statuts.",
+        "Liste : tri par colonne, édition rapide, export CSV.",
+        "Calendrier : tâches, jalons ET absences de l'équipe (couleur par personne)."]),
+    ("Capacité", "Charge intelligente de l'équipe", [
+        "Calcul basé sur l'effort réel (estimations) pondéré par l'urgence.",
+        "Tient compte des absences et de la capacité réelle (40 h/sem).",
+        "Repère les personnes en surcharge ; estimation IA possible."]),
+    ("Équipe & rôles", "Gestion des accès", [
+        "Rôles : Utilisateur, Team Leader (gère les projets), Administrateur.",
+        "Statut en ligne et dernière connexion de chaque membre.",
+        "Invitations et rappels par email."]),
+    ("Absences & Alertes", "Disponibilités et points d'attention", [
+        "Déclaration des absences (congés, maladie, télétravail…).",
+        "Alertes automatiques : tâches en retard, échéances proches.",
+        "Cloche de notifications in-app (documents, mentions, assignations)."]),
+    ("Documents — Workflow qualité", "Circuit type Veeva avant le QMS", [
+        "Phases : Rédaction → Revue équipe → Revue QA → Approbation → Prêt QMS.",
+        "Timeline animée : où en est le document et chez qui.",
+        "Verrouillage / nouvelle version (check-out / check-in), historique complet."]),
+    ("Signature électronique", "Esprit 21 CFR Part 11", [
+        "Signature obligatoire (mot de passe + motif) en Approbation et Prêt QMS.",
+        "Trace immuable : signataire, signification, motif, version, date/heure.",
+        "Affichée dans le document et dans le journal d'audit."]),
+    ("Lecteur de document", "Aperçu et commentaires ancrés", [
+        "Aperçu PDF et Word directement dans le navigateur.",
+        "Commentaires de toute l'équipe + @mentions.",
+        "Place un commentaire à un endroit précis du document (épingles)."]),
+    ("Diffusion & Lu et compris", "Suivi de lecture", [
+        "Désigne qui doit lire un document approuvé.",
+        "Chaque personne accuse réception ; suivi du taux X/Y.",
+        "Filigrane « COPIE NON CONTRÔLÉE » sur les aperçus."]),
+    ("Répertoires & liens", "Organisation documentaire", [
+        "Range les documents par répertoire (Validation, Qualification…).",
+        "Liens entre documents : « référence » / « remplace ».",
+        "Marquage automatique des documents obsolètes."]),
+    ("Import de planning (IA)", "Créer les tâches depuis un Gantt PDF", [
+        "Importe le planning d'un fournisseur (PDF) : l'IA extrait les tâches.",
+        "Distingue automatiquement les tâches fournisseur (tag dédié).",
+        "Tu valides, ajustes les dates, puis importes dans le projet."]),
+    ("Audit & traçabilité", "Tout est enregistré", [
+        "Journal d'audit : qui a fait quoi, quand (connexions, créations, signatures…).",
+        "Rapport hebdomadaire automatique par email.",
+        "Données sécurisées, héberges sur Render + PostgreSQL."]),
+]
+
+def _build_manual(app_name):
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN
+    from pptx.enum.shapes import MSO_SHAPE
+    INDIGO=RGBColor(0x4f,0x46,0xe5); TEAL=RGBColor(0x14,0xb8,0xa6)
+    INK=RGBColor(0x1e,0x29,0x3b); MUT=RGBColor(0x69,0x75,0x86)
+    LIGHT=RGBColor(0xf1,0xf5,0xf9); WHITE=RGBColor(0xff,0xff,0xff)
+    LAV=RGBColor(0xc7,0xd2,0xfe)
+    prs=Presentation(); prs.slide_width=Inches(13.333); prs.slide_height=Inches(7.5)
+    blank=prs.slide_layouts[6]; SW=prs.slide_width; SH=prs.slide_height
+    def rect(sl,l,t,w,h,color):
+        sh=sl.shapes.add_shape(MSO_SHAPE.RECTANGLE,l,t,w,h)
+        sh.fill.solid(); sh.fill.fore_color.rgb=color; sh.line.fill.background()
+        return sh
+    def tbox(sl,l,t,w,h,text,size,color,bold=False,align=PP_ALIGN.LEFT):
+        tb=sl.shapes.add_textbox(l,t,w,h); tf=tb.text_frame; tf.word_wrap=True
+        p=tf.paragraphs[0]; p.alignment=align
+        r=p.add_run(); r.text=text; r.font.size=Pt(size); r.font.bold=bold; r.font.color.rgb=color
+        return tb
+    # Couverture
+    s=prs.slides.add_slide(blank)
+    rect(s,0,0,SW,SH,INDIGO)
+    rect(s,0,Inches(5.55),SW,Inches(0.12),TEAL)
+    tbox(s,Inches(0.9),Inches(2.4),Inches(11.5),Inches(1.4),app_name,60,WHITE,True)
+    tbox(s,Inches(0.95),Inches(3.7),Inches(11.5),Inches(0.7),"Manuel utilisateur — Gestion de projet & Qualité",24,LAV)
+    tbox(s,Inches(0.95),Inches(6.2),Inches(11.5),Inches(0.5),"Astuce : remplace les zones grises par tes propres captures d'écran.",14,LAV)
+    # Sommaire
+    s=prs.slides.add_slide(blank)
+    rect(s,0,0,SW,Inches(1.1),INDIGO)
+    tbox(s,Inches(0.6),Inches(0.2),Inches(12),Inches(0.8),"Sommaire",30,WHITE,True)
+    tb=s.shapes.add_textbox(Inches(0.7),Inches(1.4),Inches(12),Inches(5.6)); tf=tb.text_frame; tf.word_wrap=True
+    for i,(title,_,_) in enumerate(MANUAL_FEATURES):
+        p=tf.paragraphs[0] if i==0 else tf.add_paragraph()
+        r=p.add_run(); r.text=f"{i+1}.  {title}"; r.font.size=Pt(16); r.font.color.rgb=INK; p.space_after=Pt(6)
+    # Une slide par fonctionnalité
+    for i,(title,sub,bullets) in enumerate(MANUAL_FEATURES):
+        s=prs.slides.add_slide(blank)
+        rect(s,0,0,SW,Inches(1.15),INDIGO)
+        rect(s,0,Inches(1.15),SW,Inches(0.08),TEAL)
+        tbox(s,Inches(0.6),Inches(0.16),Inches(12),Inches(0.7),f"{i+1}. {title}",28,WHITE,True)
+        tbox(s,Inches(0.62),Inches(0.74),Inches(12),Inches(0.4),sub,14,LAV)
+        tb=s.shapes.add_textbox(Inches(0.6),Inches(1.6),Inches(6.2),Inches(5.4)); tf=tb.text_frame; tf.word_wrap=True
+        for j,b in enumerate(bullets):
+            p=tf.paragraphs[0] if j==0 else tf.add_paragraph()
+            r=p.add_run(); r.text="•  "+b; r.font.size=Pt(16); r.font.color.rgb=INK; p.space_after=Pt(12)
+        rect(s,Inches(7.05),Inches(1.6),Inches(5.7),Inches(5.3),LIGHT)
+        tbox(s,Inches(7.05),Inches(4.0),Inches(5.7),Inches(0.6),"📷  Capture d'écran",18,MUT,True,PP_ALIGN.CENTER)
+    return prs
+
+@app.get("/api/manual.pptx")
+def manual_pptx(u: User = Depends(require_user), s: Session = Depends(get_session)):
+    app_name = _setting(s, "app_name", "Helix")
+    try:
+        prs = _build_manual(app_name)
+    except ImportError:
+        raise HTTPException(503, "Génération PPT indisponible (python-pptx non installé — redéploie).")
+    buf = io.BytesIO(); prs.save(buf); buf.seek(0)
+    fn = _urlquote(f"{app_name}-manuel-utilisateur.pptx")
+    return StreamingResponse(buf,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{fn}"})
 
 # ---------------- Rapport hebdomadaire ----------------
 REPORT_RECIPIENT = os.environ.get("WEEKLY_REPORT_EMAIL", "charlotte.foujols@alivedx.com")

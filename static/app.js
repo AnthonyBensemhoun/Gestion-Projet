@@ -902,7 +902,7 @@ document.addEventListener('click',e=>{
    pondéré par l'urgence (échéance), comparé à la CAPACITÉ DISPONIBLE réelle
    (jours ouvrés à venir moins les absences). */
 const CAP_CONFIG = {
-  weeklyHours: 35,                 // capacité hebdomadaire par personne
+  weeklyHours: 40,                 // capacité hebdomadaire par personne (contrat 40h)
   horizonDays: 14,                 // fenêtre "charge imminente" (2 semaines)
   prioHours: { h: 8, m: 4, l: 2 }, // effort par défaut (h) si pas d'estimation
   urgency: { overdue: 1.5, d3: 1.3, d7: 1.15, normal: 1.0 } // multiplicateur de pression
@@ -972,11 +972,18 @@ function renderCapacity(){
   if(!state.users.length){el.innerHTML='<div class="empty">Aucun membre.</div>';return;}
 
   const legend=`<div class="panel" style="padding:12px 14px;margin-bottom:16px;font-size:12px;color:var(--mut)">
-    <strong style="color:var(--text)">📊 Charge intelligente</strong> — basée sur l'effort restant (estimation en heures, ou défaut selon priorité : haute 8h, moyenne 4h, basse 2h),
-    pondéré par l'urgence des échéances, comparé à la capacité réelle disponible sur ${CAP_CONFIG.horizonDays} jours (jours ouvrés − absences, base ${CAP_CONFIG.weeklyHours}h/sem).
-    <span style="margin-left:8px"><span class="cal-legend-dot" style="background:var(--ok)"></span> Disponible/Optimal</span>
-    <span style="margin-left:8px"><span class="cal-legend-dot" style="background:var(--warn)"></span> Chargé (≥85%)</span>
-    <span style="margin-left:8px"><span class="cal-legend-dot" style="background:var(--bad)"></span> Surchargé (>110%)</span>
+    <div class="row" style="justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+      <div style="flex:1;min-width:260px">
+        <strong style="color:var(--text)">📊 Charge intelligente</strong> — basée sur l'effort restant (estimation en heures, ou défaut selon priorité : haute 8h, moyenne 4h, basse 2h),
+        pondéré par l'urgence des échéances, comparé à la capacité réelle disponible sur ${CAP_CONFIG.horizonDays} jours (jours ouvrés − absences, base ${CAP_CONFIG.weeklyHours}h/sem).
+        <div style="margin-top:6px">
+          <span style="margin-right:8px"><span class="cal-legend-dot" style="background:var(--ok)"></span> Disponible/Optimal</span>
+          <span style="margin-right:8px"><span class="cal-legend-dot" style="background:var(--warn)"></span> Chargé (≥85%)</span>
+          <span><span class="cal-legend-dot" style="background:var(--bad)"></span> Surchargé (>110%)</span>
+        </div>
+      </div>
+      ${IS_ADMIN?`<button class="btn sm primary" id="btnAiEstimate" title="Estime automatiquement les tâches sans estimation grâce à l'IA">🤖 Estimer la charge avec l'IA</button>`:''}
+    </div>
   </div>`;
 
   const cards=state.users.map(u=>{
@@ -1028,6 +1035,30 @@ function renderCapacity(){
   }).join('');
 
   el.innerHTML=legend+'<div class="grid cards">'+cards+'</div>';
+  const aiBtn=$('btnAiEstimate');
+  if(aiBtn) aiBtn.addEventListener('click',aiEstimateLoad);
+}
+
+async function aiEstimateLoad(){
+  const btn=$('btnAiEstimate');
+  const nbSansEst=state.tasks.filter(t=>t.status!=='done' && (!t.estimated_hours||t.estimated_hours<=0)).length;
+  if(nbSansEst===0){toast('Toutes les tâches actives ont déjà une estimation.','warn');return;}
+  if(!confirm(`L'IA va estimer la charge de ${nbSansEst} tâche(s) sans estimation et appliquer le résultat automatiquement. Continuer ?`))return;
+  if(btn){btn.disabled=true;btn.textContent='🤖 Analyse en cours…';}
+  try{
+    const r=await api('/api/ai/estimate-load',{method:'POST',body:{}});
+    if(r.updated>0){
+      toast(`IA : ${r.updated} tâche(s) estimée(s) — recalcul de la charge…`);
+      await loadAll();
+      tab('capacity');
+    }else{
+      toast(r.message||'Aucune tâche à estimer.','warn');
+      renderCapacity();
+    }
+  }catch(e){
+    toast(e.message,'err');
+    renderCapacity();
+  }
 }
 
 /* ====== Dashboard Charts (D1) ====== */

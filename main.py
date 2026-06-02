@@ -16,6 +16,10 @@ import secrets, os, json, io, re, smtplib, threading
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from apscheduler.schedulers.background import BackgroundScheduler
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
 
 # ---------------- Config ----------------
 DB_URL = os.environ.get("DATABASE_URL", "sqlite:///./atelier.db")
@@ -813,6 +817,108 @@ def send_email_endpoint(data: dict, u: User = Depends(require_user)):
     except Exception as e:
         raise HTTPException(502, f"Échec envoi email : {e}")
     return {"ok": True}
+
+# ---------------- API : IA — estimation intelligente de charge ----------------
+AI_MODEL = os.environ.get("AI_MODEL", "claude-opus-4-8")  # configurable (ex: claude-sonnet-4-6)
+_ai_client = None
+
+def _get_ai_client():
+    global _ai_client
+    if anthropic is None:
+        raise HTTPException(503, "Le SDK Anthropic n'est pas installé (redéploie avec le requirements à jour).")
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise HTTPException(503, "IA non configurée : ajoute la variable ANTHROPIC_API_KEY sur Render.")
+    if _ai_client is None:
+        _ai_client = anthropic.Anthropic()  # lit ANTHROPIC_API_KEY depuis l'environnement
+    return _ai_client
+
+_AI_SYSTEM = (
+    "Tu es un chef de projet industriel expert en estimation de charge de travail. "
+    "On te donne une liste de tâches (titre, description, priorité). Pour CHAQUE tâche, "
+    "estime le nombre d'heures de travail réalistes nécessaires pour la réaliser entièrement.\n"
+    "Repères : tâche très simple 1-2h, simple 3-4h, moyenne 6-12h, complexe 16-24h, "
+    "très complexe 32-60h. Tiens compte de la description et de la priorité (une priorité haute "
+    "n'augmente pas forcément la charge, mais l'urgence si). Sois pragmatique et cohérent entre les tâches. "
+    "Donne un 'rationale' très court (8 mots max). Réponds uniquement via le format structuré demandé."
+)
+
+_AI_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "estimates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "hours": {"type": "number"},
+                    "rationale": {"type": "string"},
+                },
+                "required": ["id", "hours", "rationale"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["estimates"],
+    "additionalProperties": False,
+}
+
+@app.post("/api/ai/estimate-load")
+def ai_estimate_load(data: dict, u: User = Depends(require_admin), s: Session = Depends(get_session)):
+    project_id = data.get("project_id")
+    q = select(Task).where(Task.status != "done")
+    if project_id:
+        q = q.where(Task.project_id == project_id)
+    tasks = s.exec(q).all()
+    to_estimate = [t for t in tasks if not t.estimated_hours or t.estimated_hours <= 0][:100]
+    if not to_estimate:
+        return {"ok": True, "updated": 0, "message": "Toutes les tâches actives ont déjà une estimation."}
+
+    client = _get_ai_client()
+    prio_lbl = {"h": "haute", "m": "moyenne", "l": "basse"}
+    payload = [{
+        "id": t.id, "titre": t.title,
+        "description": (t.description or "")[:400],
+        "priorite": prio_lbl.get(t.priority, t.priority),
+    } for t in to_estimate]
+    user_msg = ("Estime la charge en heures pour ces tâches :\n"
+                + json.dumps(payload, ensure_ascii=False, indent=1))
+
+    try:
+        resp = client.messages.create(
+            model=AI_MODEL,
+            max_tokens=8000,
+            system=[{"type": "text", "text": _AI_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_msg}],
+            output_config={"format": {"type": "json_schema", "schema": _AI_SCHEMA}},
+        )
+    except Exception as e:
+        msg = str(e)
+        if "authentication" in msg.lower() or "x-api-key" in msg.lower() or "401" in msg:
+            raise HTTPException(401, "Clé API Anthropic invalide (vérifie ANTHROPIC_API_KEY).")
+        raise HTTPException(502, f"Erreur lors de l'analyse IA : {msg}")
+
+    text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
+    try:
+        estimates = json.loads(text).get("estimates", [])
+    except Exception:
+        raise HTTPException(502, "Réponse IA illisible.")
+
+    valid_ids = {t.id for t in to_estimate}
+    updated, applied = 0, []
+    for e in estimates:
+        tid = e.get("id")
+        hrs = e.get("hours")
+        if tid in valid_ids and isinstance(hrs, (int, float)) and hrs > 0:
+            hrs = max(0.5, round(float(hrs) * 2) / 2)  # arrondi au 0.5h, plancher 0.5
+            s.execute(sa_update(Task).where(Task.id == tid).values(estimated_hours=hrs))
+            updated += 1
+            applied.append({"id": tid, "hours": hrs, "rationale": e.get("rationale", "")})
+    _audit(s, u.name, "Estimation IA", f"{updated} tâche(s) estimée(s) (modèle {AI_MODEL})")
+    s.commit()
+    return {"ok": True, "updated": updated, "applied": applied,
+            "model": AI_MODEL,
+            "usage": {"input": resp.usage.input_tokens, "output": resp.usage.output_tokens}}
 
 # ---------------- API : Gestion documentaire (qualité) ----------------
 DOC_MAX_SIZE = 25 * 1024 * 1024  # 25 Mo

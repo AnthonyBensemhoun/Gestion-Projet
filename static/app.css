@@ -103,9 +103,9 @@ kbd{font-family:'Space Grotesk',monospace;font-size:10px;background:var(--panel2
   display:flex;flex-direction:column;
   position:sticky;top:0;height:100vh;z-index:60;
 }
-.side-brand{display:flex;align-items:center;gap:12px;padding:18px 18px 14px}
+.side-brand{display:flex;align-items:center;gap:10px;padding:13px 16px 10px}
 .logo{
-  width:42px;height:42px;border-radius:12px;
+  width:36px;height:36px;border-radius:11px;
   background:linear-gradient(150deg,var(--acc),var(--acc2));
   box-shadow:var(--shadow-acc);display:grid;place-items:center;
   font-family:'Space Grotesk';font-weight:700;color:#fff;font-size:20px;
@@ -162,28 +162,28 @@ kbd{font-family:'Space Grotesk',monospace;font-size:10px;background:var(--panel2
 .only-mobile{display:none}
 
 /* ---- SIDEBAR NAV ---- */
-.side-nav{flex:1;overflow-y:auto;padding:6px 12px 12px;display:flex;flex-direction:column;gap:3px}
+.side-nav{flex:1;overflow-y:auto;padding:4px 10px 10px;display:flex;flex-direction:column;gap:1px}
 .side-group{
-  display:flex;align-items:center;gap:8px;
-  font-size:11px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;
-  color:var(--ink);
-  padding:9px 10px 7px;margin-top:14px;
+  display:flex;align-items:center;gap:7px;
+  font-size:9.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;
+  color:var(--mut);
+  padding:6px 10px 3px;margin-top:7px;
   border-top:1px solid var(--line);
 }
-.side-group:first-child{margin-top:2px;border-top:none}
+.side-group:first-child{margin-top:0;border-top:none}
 .side-group::before{
   content:'';width:7px;height:7px;border-radius:2px;flex-shrink:0;
   background:linear-gradient(135deg,var(--acc),var(--acc2));
   box-shadow:0 0 0 3px rgba(79,70,229,.10);
 }
 .side-nav .tab{
-  display:flex;align-items:center;gap:11px;
-  padding:9px 12px;border-radius:10px;cursor:pointer;
-  color:var(--mut);font-weight:600;font-size:13.5px;text-decoration:none;
+  display:flex;align-items:center;gap:9px;
+  padding:6px 10px;border-radius:8px;cursor:pointer;
+  color:var(--mut);font-weight:600;font-size:12.5px;text-decoration:none;
   border:1px solid transparent;transition:all var(--t-fast);position:relative;
 }
 .side-nav .tab .ic{
-  width:20px;text-align:center;font-size:15px;flex-shrink:0;
+  width:17px;text-align:center;font-size:13px;flex-shrink:0;
   transform-origin:center center;will-change:transform;
   transition:filter .2s ease;            /* le transform est piloté en continu par JS (lerp), pas de transition dessus */
 }

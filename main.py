@@ -331,6 +331,29 @@ _CSP = ("default-src 'self'; "
         "connect-src 'self'; "
         "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 
+def _client_ip(request: Request) -> str:
+    """IP réelle du client (X-Forwarded-For derrière le proxy Render)."""
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "?"
+
+# Rate-limiting global en mémoire (fenêtre glissante par IP). Généreux : une page
+# déclenche plusieurs appels. Objectif : bloquer le matraquage / déni de service.
+_RATE = {}                       # ip -> [nb, début_fenêtre]
+_RATE_MAX = 300                  # requêtes
+_RATE_WINDOW = 60                # par minute
+_MAX_BODY = 30 * 1024 * 1024     # 30 Mo (uploads ≤ 25 Mo + marge)
+
+def _rate_limited(ip: str) -> bool:
+    now = datetime.utcnow()
+    c = _RATE.get(ip)
+    if not c or (now - c[1]).total_seconds() >= _RATE_WINDOW:
+        _RATE[ip] = [1, now]
+        return False
+    c[0] += 1
+    return c[0] > _RATE_MAX
+
 def _same_origin(request: Request) -> bool:
     """Vrai si la requête provient de notre propre origine (anti-CSRF)."""
     host = request.headers.get("host", "")
@@ -347,9 +370,17 @@ def _same_origin(request: Request) -> bool:
 
 @app.middleware("http")
 async def _security_headers(request: Request, call_next):
+    from fastapi.responses import PlainTextResponse
+    ip = _client_ip(request)
+    # Anti-DoS : plafond de débit par IP.
+    if _rate_limited(ip):
+        resp = PlainTextResponse("Trop de requêtes. Réessaie dans un instant.", status_code=429)
+        resp.headers["Retry-After"] = "30"
+    # Anti-DoS : plafond de taille de requête.
+    elif (request.headers.get("content-length") or "").isdigit() and int(request.headers["content-length"]) > _MAX_BODY:
+        resp = PlainTextResponse("Requête trop volumineuse.", status_code=413)
     # Protection CSRF : toute requête mutante doit venir de notre origine.
-    if request.method in ("POST", "PUT", "DELETE", "PATCH") and not _same_origin(request):
-        from fastapi.responses import PlainTextResponse
+    elif request.method in ("POST", "PUT", "DELETE", "PATCH") and not _same_origin(request):
         resp = PlainTextResponse("Requête refusée (origine non autorisée).", status_code=403)
     else:
         resp = await call_next(request)

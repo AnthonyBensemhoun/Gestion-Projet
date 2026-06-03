@@ -1977,6 +1977,7 @@ MANUAL_FEATURES = [
         "À chaque push vers une personne, on précise l'action attendue : Lecture (relire/vérifier) ou Rédaction (produire/modifier).",
         "Timeline animée : où en est le document et chez qui.",
         "Verrouillage / nouvelle version (check-out / check-in), historique complet.",
+        "Au verrouillage, l'app enregistre une copie locale de la dernière version dans le dossier de travail que tu choisis (double de sécurité réseau ; sélecteur de dossier sur Edge/Chrome, sinon téléchargement).",
         "Un document « chez » un collègue ne peut être poussé que par lui — ou un admin.",
         "Bandeau QMS en tête de page : hors délai SLA, signatures attendues, « lu & compris » dus, diffusions, obsolètes."]),
     ("Signature électronique", "Esprit 21 CFR Part 11", [

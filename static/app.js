@@ -2500,7 +2500,40 @@ async function saveDoc(){
 }
 
 async function lockDoc(id){
-  try{await api('/api/documents/'+id+'/lock',{method:'POST',body:{}});refreshDocViews(id);}
+  // Au check-out : on enregistre une COPIE LOCALE de la dernière version dans le
+  // dossier de travail choisi par l'utilisateur (sécurité réseau / pas de perte).
+  const d0=(currentDocObj&&currentDocObj.id===id)?currentDocObj:null;
+  const cur0=d0&&d0.versions&&d0.versions[0];
+  const fname=(cur0&&cur0.filename)||((d0&&d0.name)||'document');
+  // IMPORTANT : showSaveFilePicker exige le "geste" utilisateur → on ouvre le
+  // sélecteur AVANT tout await (sinon le navigateur le bloque).
+  let handle=null, hasPicker=!!(cur0&&window.showSaveFilePicker);
+  if(hasPicker){
+    try{ handle=await window.showSaveFilePicker({suggestedName:fname}); }
+    catch(e){ handle=null; }   // utilisateur a annulé le sélecteur
+  }
+  try{
+    await api('/api/documents/'+id+'/lock',{method:'POST',body:{}});
+    if(cur0){
+      try{
+        const r=await fetch('/api/documents/'+id+'/versions/'+cur0.id+'/download');
+        if(r.ok){
+          const blob=await r.blob();
+          if(handle){                       // Chrome/Edge : écrit dans le dossier choisi
+            const w=await handle.createWritable(); await w.write(blob); await w.close();
+            toast('📁 Copie locale enregistrée dans ton dossier de travail');
+          }else if(!hasPicker){             // Firefox/Safari : téléchargement classique
+            const a=document.createElement('a');
+            a.href=URL.createObjectURL(blob); a.download=fname;
+            document.body.appendChild(a); a.click(); a.remove();
+            setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+            toast('📁 Copie locale téléchargée (dossier Téléchargements)');
+          }
+        }
+      }catch(_){ /* la copie locale est un bonus : ne pas faire échouer le verrouillage */ }
+    }
+    refreshDocViews(id);
+  }
   catch(e){toast(e.message,'err');}
 }
 async function unlockDoc(id){

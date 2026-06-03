@@ -1948,8 +1948,11 @@ async function openDocDetail(docId){
     <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:10px">
       <div class="field" style="flex:1;min-width:150px;margin:0"><label style="font-size:11px">Nouvelle phase</label>
         <select id="f_docPhase" class="btn sm" style="width:100%">${phaseOpts}</select></div>
-      <div class="field" style="flex:1;min-width:150px;margin:0"><label style="font-size:11px">Assigner à</label>
+      <div class="field" id="f_docAssigneeField" style="flex:1;min-width:150px;margin:0"><label style="font-size:11px">Assigner à</label>
         <select id="f_docAssignee" class="btn sm" style="width:100%">${assigneeOpts}</select></div>
+    </div>
+    <div id="f_docQaNote" class="hidden" style="margin-top:10px;padding:10px 12px;border-radius:var(--r-sm);background:rgba(155,89,182,.08);border:1px solid rgba(155,89,182,.25);font-size:12.5px;color:var(--ink)">
+      🔬 La <strong>Revue QA</strong> se déroule dans <strong>D.O.T / QMS</strong> : pas d'assignation interne ici. En validant, le portail D.O.T s'ouvrira pour y pousser le document.
     </div>
     <div class="field" id="f_docActionField" style="margin:8px 0 0"><label style="font-size:11px">Action attendue de la personne <span style="color:var(--warn)">*</span></label>
       <select id="f_docAction" class="btn sm" style="width:100%">
@@ -2154,14 +2157,23 @@ async function openDocDetail(docId){
   c.querySelectorAll('[data-open-linked-task]').forEach(el=>el.addEventListener('click',()=>{
     closeModal('docDetailModal');closeModal('docViewerModal');openTask(el.dataset.openLinkedTask);
   }));
-  // Affiche le bloc signature si la phase choisie l'exige
-  const phaseSel=$('f_docPhase');
-  function toggleSign(){const need=DOC_SIGN_PHASES.includes(phaseSel.value);$('docSignBlock').classList.toggle('hidden',!need);}
-  if(phaseSel){phaseSel.addEventListener('change',toggleSign);toggleSign();}
-  // L'action attendue (Lecture/Rédaction) n'a de sens que si on assigne quelqu'un
-  const assigneeSel=$('f_docAssignee'), actionField=$('f_docActionField');
-  function toggleAction(){if(actionField)actionField.classList.toggle('hidden',!assigneeSel.value);}
-  if(assigneeSel&&actionField){assigneeSel.addEventListener('change',toggleAction);toggleAction();}
+  // Adapte le formulaire de transition selon la phase choisie
+  const phaseSel=$('f_docPhase'), assigneeSel=$('f_docAssignee');
+  function refreshTransUI(){
+    if(!phaseSel)return;
+    const ph=phaseSel.value;
+    const isQA=(ph==='revue_qa');                 // revue QA = externe (D.O.T) : pas d'assignation
+    const signBlock=$('docSignBlock'), assigneeField=$('f_docAssigneeField');
+    const actionField=$('f_docActionField'), qaNote=$('f_docQaNote');
+    if(signBlock)signBlock.classList.toggle('hidden',!DOC_SIGN_PHASES.includes(ph));
+    if(assigneeField)assigneeField.classList.toggle('hidden',isQA);
+    if(qaNote)qaNote.classList.toggle('hidden',!isQA);
+    // L'action (Lecture/Rédaction) n'a de sens qu'avec un assigné interne
+    if(actionField)actionField.classList.toggle('hidden',isQA||!(assigneeSel&&assigneeSel.value));
+  }
+  if(phaseSel)phaseSel.addEventListener('change',refreshTransUI);
+  if(assigneeSel)assigneeSel.addEventListener('change',refreshTransUI);
+  refreshTransUI();
 }
 
 async function ackDoc(){
@@ -2407,8 +2419,9 @@ async function addDocComment(anchor){
 async function docTransition(){
   if(!currentDocId)return;
   const phase=$('f_docPhase').value;
-  const assigneeVal=$('f_docAssignee').value;
-  const actionVal=$('f_docAction')?$('f_docAction').value:'';
+  const isQA=(phase==='revue_qa');   // revue QA = externe (D.O.T) : pas d'assignation interne
+  const assigneeVal=isQA?'':$('f_docAssignee').value;
+  const actionVal=isQA?'':($('f_docAction')?$('f_docAction').value:'');
   const note=$('f_docTransNote').value.trim();
   const notify=$('f_docNotify').checked;
   const ph=DOC_PHASE_BY_KEY[phase];
@@ -2430,6 +2443,8 @@ async function docTransition(){
     const r=await api('/api/documents/'+currentDocId+'/transition',{method:'POST',body});
     const actLbl=DOC_ACTION_LABELS[actionVal]||'';
     toast((DOC_SIGN_PHASES.includes(phase)?'✒️ Signé et déplacé en « ':'Document déplacé en « ')+(ph?ph.label:phase)+' »'+(actLbl&&assigneeVal?' · '+actLbl:''));
+    // Revue QA = externe : on ouvre le portail D.O.T pour y pousser le document
+    if(isQA){toast('Ouverture de D.O.T / QMS pour y pousser le document…');window.open(DOT_QMS_URL,'_blank','noopener');}
     // Notification email via Outlook (mailto) — ouvre depuis ton compte
     if(notify && assigneeVal && r.assignee_email){
       const docName=currentDocObj?currentDocObj.name:'document';

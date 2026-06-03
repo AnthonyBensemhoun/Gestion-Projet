@@ -1474,6 +1474,9 @@ def transition_document(doc_id: int, data: dict, u: User = Depends(require_user)
             raise HTTPException(400, "Personne assignée introuvable")
     else:
         assigned_to = None
+    # La revue QA se déroule dans D.O.T (externe) : aucune assignation interne.
+    if phase == "revue_qa":
+        assigned_to = None
     # Action attendue (Lecture / Rédaction) — obligatoire dès qu'on assigne quelqu'un.
     action_type = (data.get("action_type") or "").strip().lower()
     if assigned_to:

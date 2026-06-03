@@ -1716,7 +1716,7 @@ const DOC_PHASES=[
 ];
 const DOC_PHASE_BY_KEY=Object.fromEntries(DOC_PHASES.map(p=>[p.key,p]));
 const DOC_TERMINAL_PHASE='transmis_qms';   // cycle clôturé : hors atelier (chez D.O.T / QMS)
-const DOT_QMS_URL='https://alivedx.workvivo.com/apps';   // portail D.O.T / QMS officiel
+const DOT_QMS_URL='https://alivedx.lightning.force.com/lightning/page/home';   // portail D.O.T / QMS officiel
 const DOC_ACTION_LABELS={lecture:'Lecture', redaction:'Rédaction'};
 const DOC_ACTION_ICONS={lecture:'📖', redaction:'✍️'};
 // Petite pastille colorée "Pour Lecture / Pour Rédaction"

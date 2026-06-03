@@ -655,7 +655,7 @@ async function remindTask(taskId){
 /* ====== Navigation ====== */
 function tab(name){
   document.querySelectorAll('nav .tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));
-  ['me','portfolio','dash','kpi','synth','tasks','team','absence','alerts','kanban','cal','list','docs','capacity','audit'].forEach(s=>{
+  ['me','portfolio','dash','kpi','synth','vcycle','tasks','team','absence','alerts','kanban','cal','list','docs','capacity','audit'].forEach(s=>{
     const el=$('sec-'+s);
     if(!el) return;
     if(s===name){
@@ -672,7 +672,153 @@ function tab(name){
   if(name==='me') renderMe();
   if(name==='portfolio') renderPortfolio();
   if(name==='synth') drawBurndown();
+  if(name==='vcycle') renderVCycle();
 }
+/* ============================ CYCLE EN V ============================ */
+let _vc=null;        // dernier payload /vcycle chargé
+let _vcDocs=[];      // documents disponibles pour le projet courant
+
+async function renderVCycle(){
+  const el=$('vcycleContent'); if(!el) return;
+  if(!state.currentProject){ el.innerHTML='<div class="empty">Sélectionne d\'abord un projet.</div>'; return; }
+  el.innerHTML='<div class="empty">Chargement…</div>';
+  try{
+    const [vc, docs]=await Promise.all([
+      api('/api/projects/'+state.currentProject+'/vcycle'),
+      api('/api/documents')
+    ]);
+    _vc=vc;
+    // documents rattachables : ceux du projet + les documents de service (globaux)
+    _vcDocs=docs.filter(d=> String(d.project_id)===String(state.currentProject) || !d.project_id);
+  }catch(e){ el.innerHTML='<div class="empty">Erreur : '+esc(e.message)+'</div>'; return; }
+  drawVCycle();
+}
+
+async function vcUpdate(vid, body){
+  try{ _vc=await api('/api/vphases/'+vid,{method:'PUT',body}); drawVCycle(); }
+  catch(e){ toast(e.message,'err'); }
+}
+async function vcUpdateProj(body){
+  try{ _vc=await api('/api/projects/'+state.currentProject+'/vcycle',{method:'PUT',body}); drawVCycle(); }
+  catch(e){ toast(e.message,'err'); }
+}
+
+function vcSlot(p, sl, i){
+  const f = i===0 ? 'doc1' : 'doc2';
+  const cell = sl.doc_id
+    ? `<span class="vc-doc-linked" title="${esc(sl.doc_name||'')}">📄 ${esc(sl.doc_name||'document')}`
+      + `<button class="vc-unlink" data-unlink="${p.id}" data-slot="${f}" title="Retirer le document">✕</button></span>`
+    : `<span class="vc-drop" data-drop="${p.id}" data-slot="${f}">⊕ déposer un document</span>`;
+  return `<div class="vc-slot">
+    <div class="vc-slot-top">
+      <span class="vc-slot-name">${esc(sl.name)}</span>
+      <input type="date" class="vc-appr" data-appr="${p.id}" data-slot="${f}" value="${sl.approved_at||''}" title="Date d'approbation (QMS)">
+    </div>
+    ${cell}
+  </div>`;
+}
+
+function vcPhaseCard(p){
+  const off=!p.enabled;
+  const slots = off ? '' : '<div class="vc-slots">'+p.slots.map((sl,i)=>vcSlot(p,sl,i)).join('')+'</div>';
+  return `<div class="vc-phase ${off?'off':'st-'+p.status}" data-id="${p.id}">
+    <div class="vc-phase-h">
+      <label class="vc-toggle" title="Retenir cette phase pour ce projet">
+        <input type="checkbox" data-toggle="${p.id}" ${p.enabled?'checked':''}>
+      </label>
+      <span class="vc-phase-title">${esc(p.label)}</span>
+      <span class="vc-chip ${off?'off':p.status}">${off?'Non retenue':esc(p.status_label)}</span>
+    </div>${slots}
+  </div>`;
+}
+
+function drawVCycle(){
+  const el=$('vcycleContent'); if(!el||!_vc) return;
+  const pr=_vc.project;
+  const byBranch={spec:[],test:[],qualif:[]};
+  _vc.phases.forEach(p=>{ (byBranch[p.branch]||byBranch.spec).push(p); });
+
+  const startTxt = pr.cra_deposit_date ? fmtDate(pr.cra_deposit_date) : '—';
+  const endTxt = _vc.final_report_approved_at ? fmtDate(_vc.final_report_approved_at)
+                : (pr.cra_deposit_date ? 'en cours' : '—');
+  const durBadge = pr.cra_deposit_date
+    ? `<span class="vc-dur ${_vc.ongoing?'ongoing':'done'}">${_vc.duration_days} jour${Math.abs(_vc.duration_days)>1?'s':''}${_vc.ongoing?' (en cours)':' (clôturé)'}</span>`
+    : '<span class="meta">Renseigne le dépôt du CRA pour démarrer le chrono projet.</span>';
+
+  const head=`<div class="vc-head panel">
+    <div class="vc-head-grid">
+      <div class="field"><label>N° Change Control (CC)</label><input id="vcCC" placeholder="CC-2026-001" value="${esc(pr.cc_number)}"></div>
+      <div class="field"><label>Réf. demande de changement (CRA)</label><input id="vcCRA" placeholder="CRA-…" value="${esc(pr.cra_ref)}"></div>
+      <div class="field"><label>Dépôt du CRA — départ du chrono</label><input type="date" id="vcDep" value="${pr.cra_deposit_date||''}"></div>
+    </div>
+    <div class="vc-progress">
+      <div class="vc-prog-bar"><span style="width:${_vc.progress}%"></span></div>
+      <div class="vc-prog-meta"><strong>${_vc.progress}%</strong> validé&nbsp;·&nbsp; Début ${startTxt} → Fin ${endTxt} &nbsp;·&nbsp; ${durBadge}</div>
+    </div>
+  </div>`;
+
+  const ccTxt = pr.cc_number ? esc(pr.cc_number) : '—';
+  const exitDone = !!_vc.final_report_approved_at;
+  const board=`<div class="vcycle-board">
+    <div class="vc-col vc-col-left">
+      <div class="vc-node entry">📥 <b>Entrée</b> — CRA déposé · CC ${ccTxt}</div>
+      <div class="vc-branch-lbl">① Spécifications <span>↓</span></div>
+      ${byBranch.spec.map(vcPhaseCard).join('')}
+    </div>
+    <div class="vc-col vc-col-right">
+      <div class="vc-node exit ${exitDone?'done':''}">📤 <b>Sortie</b> — Rapport PQ ${exitDone?('approuvé le '+fmtDate(_vc.final_report_approved_at)):'non approuvé'}</div>
+      <div class="vc-branch-lbl">③ Qualifications <span>↑</span></div>
+      ${byBranch.qualif.slice().reverse().map(vcPhaseCard).join('')}
+    </div>
+    <div class="vc-bottom">
+      <div class="vc-branch-lbl">② Essais d'acceptation</div>
+      <div class="vc-bottom-row">${byBranch.test.map(vcPhaseCard).join('')}</div>
+    </div>
+  </div>`;
+
+  const tray=`<div class="vc-tray">
+    <div class="vc-tray-h">📄 Documents du projet — glisse-les dans une phase</div>
+    <div class="vc-tray-list">${_vcDocs.length
+      ? _vcDocs.map(d=>`<div class="vc-docchip" draggable="true" data-doc="${d.id}">📄 ${esc(d.name)}</div>`).join('')
+      : '<span class="meta">Aucun document rattachable. Ajoute-en dans l\'onglet Documents.</span>'}</div>
+  </div>`;
+
+  el.innerHTML=head+board+tray;
+  wireVCycle();
+}
+
+function wireVCycle(){
+  const el=$('vcycleContent'); if(!el) return;
+  // Méta projet
+  const cc=$('vcCC'), cra=$('vcCRA'), dep=$('vcDep');
+  if(cc)  cc.addEventListener('change', e=>vcUpdateProj({cc_number:e.target.value}));
+  if(cra) cra.addEventListener('change', e=>vcUpdateProj({cra_ref:e.target.value}));
+  if(dep) dep.addEventListener('change', e=>vcUpdateProj({cra_deposit_date:e.target.value||null}));
+  // Activer/désactiver une phase
+  el.querySelectorAll('[data-toggle]').forEach(c=>c.addEventListener('change',
+    ()=>vcUpdate(c.dataset.toggle,{enabled:c.checked})));
+  // Date d'approbation d'un slot
+  el.querySelectorAll('[data-appr]').forEach(inp=>inp.addEventListener('change',()=>{
+    const b={}; b[inp.dataset.slot+'_approved_at']=inp.value||null; vcUpdate(inp.dataset.appr,b);
+  }));
+  // Retirer le document d'un slot
+  el.querySelectorAll('[data-unlink]').forEach(btn=>btn.addEventListener('click',()=>{
+    const b={}; b[btn.dataset.slot+'_id']=null; vcUpdate(btn.dataset.unlink,b);
+  }));
+  // Glisser-déposer : chips -> slots
+  el.querySelectorAll('.vc-docchip').forEach(ch=>ch.addEventListener('dragstart',
+    e=>{ e.dataTransfer.setData('text/plain', ch.dataset.doc); e.dataTransfer.effectAllowed='copy'; }));
+  el.querySelectorAll('[data-drop]').forEach(z=>{
+    z.addEventListener('dragover', e=>{ e.preventDefault(); z.classList.add('over'); });
+    z.addEventListener('dragleave', ()=>z.classList.remove('over'));
+    z.addEventListener('drop', e=>{
+      e.preventDefault(); z.classList.remove('over');
+      const did=e.dataTransfer.getData('text/plain'); if(!did) return;
+      const b={}; b[z.dataset.slot+'_id']=parseInt(did,10); vcUpdate(z.dataset.drop, b);
+    });
+  });
+}
+
 function openModal(id){fillSelects();$(id).classList.add('show');}
 function closeModal(id){$(id).classList.remove('show');}
 function fillSelects(){
@@ -3277,6 +3423,7 @@ const TOUR_STEPS=[
   {sel:'#btnImportGantt', tab:'dash', pos:'bottom', title:'📥 Importer un planning', text:"Tu as déjà un planning (Gantt PDF) d'un fournisseur ? Importe-le : l'IA crée les tâches automatiquement."},
   {sel:'.side-nav .tab[data-tab="tasks"]', tab:'tasks', pos:'right', title:'✓ Tâches', text:"Voici les tâches du projet exemple. Crée, suis et assigne-les. Les chefs de projet peuvent les assigner à d'autres (avec notification + email)."},
   {sel:'#burndownChart', tab:'synth', pos:'top', title:'📉 Avancement planifié vs réel', text:"Dans la <strong>Synthèse</strong>, la courbe d'avancement compare le rythme <strong>planifié</strong> (chaque tâche finie à son échéance) au <strong>réel</strong> : un coup d'œil suffit pour voir si le projet est en avance ou en retard. Juste en dessous, le diagramme de Gantt."},
+  {sel:'.side-nav .tab[data-tab="vcycle"]', tab:'vcycle', pos:'right', title:'✅ Cycle en V', text:"Le cœur de la validation pharma : ton projet dessiné en <strong>cycle en V</strong>. En haut tu saisis le <strong>n° de Change Control (CC)</strong> et la <strong>date de dépôt du CRA</strong> — c'est le départ du chrono projet. Chaque phase (VP, URS, SF, SD, puis FAT, SAT, IQ, OQ, PQ) a un interrupteur : <strong>tu actives seulement celles qui te concernent</strong> (capitalisation des SAT, refaire juste la PQ…). Tu <strong>glisses un document</strong> dans une phase et tu saisis sa date d'approbation. Le projet est <strong>clôturé quand le rapport PQ est approuvé</strong>."},
   {sel:'.side-nav .tab[data-tab="team"]', tab:'team', pos:'right', title:'👥 Équipe', text:"La liste des membres : rôle, disponibilité, et — important — <strong>ton trigramme</strong>. On le règle juste après 👇"},
   {sel:`[data-set-trigram="${ME.id}"]`, tab:'team', pos:'right', title:'🔖 Renseigne ton trigramme', text:"Ton <strong>trigramme</strong> = tes initiales (ex : <strong>ABS</strong>). C'est ta <strong>signature</strong> documentaire : il est <strong>obligatoire pour valider / pousser un document</strong>, et il s'inscrit automatiquement dans le nom du fichier (ex : <em>Planning_ABS_V2</em>).<br><br>👉 Clique « <strong>Définir trigramme</strong> » sur ta carte et saisis 2 à 4 lettres. À faire une seule fois.",
    action:`<button class="btn primary sm" id="tourSetTrigram" style="margin-bottom:8px">🔖 Définir mon trigramme maintenant</button>`},

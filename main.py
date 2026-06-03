@@ -80,6 +80,11 @@ class Project(SQLModel, table=True):
     created_by: Optional[int] = Field(default=None)   # créateur
     lead_id: Optional[int] = Field(default=None)      # chef de projet (responsable)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    # ---- Cycle en V (validation pharma) ----
+    cc_number: str = ""                                  # n° de Change Control (QMS)
+    cra_ref: str = ""                                    # référence de la demande de changement (CRA)
+    cra_deposit_date: Optional[date] = Field(default=None)  # dépôt du CRA = départ du chrono projet
+    vcycle_template: str = "complet"                     # gabarit de phases utilisé
 
 class Task(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -252,6 +257,22 @@ class Notification(SQLModel, table=True):
 class UserPref(SQLModel, table=True):
     user_id: int = Field(primary_key=True)
     data: str = "{}"   # préférences personnelles (widgets, notes, mémo…) en JSON
+
+class VPhase(SQLModel, table=True):
+    """Une phase du cycle en V pour un projet (activable/désactivable, modulable).
+    Chaque phase porte jusqu'à 2 slots documentaires : doc1 (Protocole/Spéc) et
+    doc2 (Rapport). Le document lié vient du module Documents ; la date
+    d'approbation est saisie (l'approbation réelle se fait dans le QMS/D.O.T)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(index=True)
+    phase_key: str = ""        # vp / urs / sf / sd / fat / sat / iq / oq / pq
+    enabled: bool = Field(default=True)   # phase retenue pour ce projet ?
+    position: int = Field(default=0)
+    doc1_id: Optional[int] = Field(default=None)            # Protocole / Spécification
+    doc1_approved_at: Optional[date] = Field(default=None)
+    doc2_id: Optional[int] = Field(default=None)            # Rapport (phases de qualif)
+    doc2_approved_at: Optional[date] = Field(default=None)
+    note: str = ""
 
 # ---------------- Helpers ----------------
 def get_session():
@@ -460,6 +481,14 @@ def on_startup():
              "ALTER TABLE document ADD COLUMN confidential BOOLEAN DEFAULT 0 NOT NULL"),
             ("ALTER TABLE docworkflowevent ADD COLUMN IF NOT EXISTS action_type VARCHAR DEFAULT ''",
              "ALTER TABLE docworkflowevent ADD COLUMN action_type VARCHAR DEFAULT ''"),
+            ("ALTER TABLE project ADD COLUMN IF NOT EXISTS cc_number VARCHAR DEFAULT ''",
+             "ALTER TABLE project ADD COLUMN cc_number VARCHAR DEFAULT ''"),
+            ("ALTER TABLE project ADD COLUMN IF NOT EXISTS cra_ref VARCHAR DEFAULT ''",
+             "ALTER TABLE project ADD COLUMN cra_ref VARCHAR DEFAULT ''"),
+            ("ALTER TABLE project ADD COLUMN IF NOT EXISTS cra_deposit_date DATE",
+             "ALTER TABLE project ADD COLUMN cra_deposit_date DATE"),
+            ("ALTER TABLE project ADD COLUMN IF NOT EXISTS vcycle_template VARCHAR DEFAULT 'complet'",
+             "ALTER TABLE project ADD COLUMN vcycle_template VARCHAR DEFAULT 'complet'"),
         ]
         for pg_stmt, sq_stmt in migrations:
             try:
@@ -742,8 +771,150 @@ def delete_project(pid: int, u: User = Depends(require_user), s: Session = Depen
             for ln in s.exec(select(TaskDocLink).where(TaskDocLink.task_id == t.id)).all():
                 s.delete(ln)
             s.delete(t)
+        for v in s.exec(select(VPhase).where(VPhase.project_id == pid)).all():
+            s.delete(v)
         s.delete(p); s.commit()
     return {"ok": True}
+
+# ---------------- API : Cycle en V (validation pharma) ----------------
+# branch : "spec" (branche descendante) · "test" (bas du V) · "qualif" (branche montante)
+# slots  : libellés des slots documentaires. 1 slot = phase à document unique ;
+#          2 slots = Protocole (avant exécution) + Rapport (après exécution).
+V_PHASE_DEFS = {
+    "vp":  {"label": "VP — Plan de validation",        "branch": "spec",   "slots": ["Plan de validation"]},
+    "urs": {"label": "URS — Besoins utilisateurs",     "branch": "spec",   "slots": ["Spécification (URS)"]},
+    "sf":  {"label": "SF — Spéc. fonctionnelle",       "branch": "spec",   "slots": ["Spécification fonctionnelle"]},
+    "sd":  {"label": "SD — Spéc. détaillée / design",  "branch": "spec",   "slots": ["Spécification détaillée"]},
+    "fat": {"label": "FAT — Acceptation usine",        "branch": "test",   "slots": ["Protocole FAT", "Rapport FAT"]},
+    "sat": {"label": "SAT — Acceptation site",         "branch": "test",   "slots": ["Protocole SAT", "Rapport SAT"]},
+    "iq":  {"label": "IQ — Qualif. d'installation",    "branch": "qualif", "slots": ["Protocole IQ", "Rapport IQ"]},
+    "oq":  {"label": "OQ — Qualif. opérationnelle",    "branch": "qualif", "slots": ["Protocole OQ", "Rapport OQ"]},
+    "pq":  {"label": "PQ — Qualif. de performance",    "branch": "qualif", "slots": ["Protocole PQ", "Rapport PQ"]},
+}
+V_TEMPLATES = {
+    "complet": ["vp", "urs", "sf", "sd", "fat", "sat", "iq", "oq", "pq"],
+}
+V_FINAL_PHASE = "pq"   # phase dont le rapport approuvé clôt le projet
+
+def _ensure_vphases(s: Session, pid: int, template: str = "complet"):
+    """Crée (idempotent) les phases du gabarit pour un projet et renvoie la liste triée."""
+    order = V_TEMPLATES.get(template, V_TEMPLATES["complet"])
+    existing = {v.phase_key: v for v in s.exec(select(VPhase).where(VPhase.project_id == pid)).all()}
+    changed = False
+    for i, key in enumerate(order):
+        if key not in existing:
+            s.add(VPhase(project_id=pid, phase_key=key, position=i, enabled=True)); changed = True
+    if changed: s.commit()
+    return s.exec(select(VPhase).where(VPhase.project_id == pid).order_by(VPhase.position)).all()
+
+def _vslots(key: str):
+    return V_PHASE_DEFS.get(key, {}).get("slots", [])
+
+def _vphase_state(v: "VPhase"):
+    """Renvoie (code, libellé) du statut d'une phase."""
+    n = len(_vslots(v.phase_key))
+    if n <= 1:
+        if v.doc1_approved_at: return ("done", "Approuvé")
+        if v.doc1_id:          return ("wip", "En cours")
+        return ("todo", "À faire")
+    if v.doc2_approved_at: return ("done", "Rapport approuvé")
+    if v.doc1_approved_at: return ("proto", "Protocole approuvé")
+    if v.doc1_id or v.doc2_id: return ("wip", "En cours")
+    return ("todo", "À faire")
+
+def _parse_date(val):
+    if not val: return None
+    try: return date.fromisoformat(str(val)[:10])
+    except Exception: return None
+
+def _vcycle_payload(s: Session, p: "Project"):
+    phases = _ensure_vphases(s, p.id, p.vcycle_template or "complet")
+    # noms/statuts des documents liés
+    ids = {x for v in phases for x in (v.doc1_id, v.doc2_id) if x}
+    docs = {d.id: d for d in s.exec(select(Document).where(Document.id.in_(ids))).all()} if ids else {}
+    def slot(doc_id, approved):
+        d = docs.get(doc_id) if doc_id else None
+        return {"doc_id": doc_id, "doc_name": d.name if d else None,
+                "doc_phase": d.phase if d else None,
+                "approved_at": approved.isoformat() if approved else None}
+    out_phases, total, done = [], 0, 0
+    for v in phases:
+        defs = V_PHASE_DEFS.get(v.phase_key, {})
+        names = _vslots(v.phase_key)
+        slots = []
+        if len(names) >= 1: slots.append({"name": names[0], **slot(v.doc1_id, v.doc1_approved_at)})
+        if len(names) >= 2: slots.append({"name": names[1], **slot(v.doc2_id, v.doc2_approved_at)})
+        code, lbl = _vphase_state(v)
+        if v.enabled:
+            total += len(names)
+            if len(names) >= 1 and v.doc1_approved_at: done += 1
+            if len(names) >= 2 and v.doc2_approved_at: done += 1
+        out_phases.append({"id": v.id, "phase_key": v.phase_key,
+                           "label": defs.get("label", v.phase_key),
+                           "branch": defs.get("branch", "spec"),
+                           "enabled": v.enabled, "position": v.position,
+                           "note": v.note, "status": code, "status_label": lbl,
+                           "slots": slots})
+    # durée du projet : dépôt CRA -> rapport de la phase finale approuvé
+    enabled = [v for v in phases if v.enabled]
+    final = next((v for v in phases if v.phase_key == V_FINAL_PHASE and v.enabled), None) \
+        or (enabled[-1] if enabled else None)
+    end_date = None
+    if final:
+        end_date = final.doc2_approved_at if len(_vslots(final.phase_key)) >= 2 else final.doc1_approved_at
+    ongoing = end_date is None
+    duration_days = None
+    if p.cra_deposit_date:
+        duration_days = ((end_date or date.today()) - p.cra_deposit_date).days
+    return {
+        "project": {"id": p.id, "name": p.name, "cc_number": p.cc_number,
+                    "cra_ref": p.cra_ref,
+                    "cra_deposit_date": p.cra_deposit_date.isoformat() if p.cra_deposit_date else None,
+                    "vcycle_template": p.vcycle_template or "complet"},
+        "phases": out_phases,
+        "progress": round(done / total * 100) if total else 0,
+        "duration_days": duration_days, "ongoing": ongoing,
+        "final_phase": final.phase_key if final else None,
+        "final_report_approved_at": end_date.isoformat() if end_date else None,
+    }
+
+@app.get("/api/projects/{pid}/vcycle")
+def get_vcycle(pid: int, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    p = s.get(Project, pid)
+    if not p: raise HTTPException(404, "Projet introuvable")
+    return _vcycle_payload(s, p)
+
+@app.put("/api/projects/{pid}/vcycle")
+def update_vcycle(pid: int, data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    p = s.get(Project, pid)
+    if not p: raise HTTPException(404, "Projet introuvable")
+    if "cc_number" in data: p.cc_number = (data.get("cc_number") or "").strip()
+    if "cra_ref" in data:   p.cra_ref = (data.get("cra_ref") or "").strip()
+    if "cra_deposit_date" in data: p.cra_deposit_date = _parse_date(data.get("cra_deposit_date"))
+    if data.get("vcycle_template") in V_TEMPLATES: p.vcycle_template = data["vcycle_template"]
+    s.add(p); _audit(s, u.name, "Cycle en V — projet", f"{p.name} (CC {p.cc_number or '—'})")
+    s.commit()
+    return _vcycle_payload(s, p)
+
+@app.put("/api/vphases/{vid}")
+def update_vphase(vid: int, data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    v = s.get(VPhase, vid)
+    if not v: raise HTTPException(404, "Phase introuvable")
+    for fld, doc_fld, appr_fld in (("doc1", "doc1_id", "doc1_approved_at"),
+                                   ("doc2", "doc2_id", "doc2_approved_at")):
+        if f"{fld}_id" in data:
+            did = data.get(f"{fld}_id")
+            if did and not s.get(Document, did): raise HTTPException(400, "Document introuvable")
+            setattr(v, doc_fld, did or None)
+        if f"{fld}_approved_at" in data:
+            setattr(v, appr_fld, _parse_date(data.get(f"{fld}_approved_at")))
+    if "enabled" in data: v.enabled = bool(data["enabled"])
+    if "note" in data: v.note = (data.get("note") or "").strip()
+    s.add(v)
+    p = s.get(Project, v.project_id)
+    _audit(s, u.name, "Cycle en V — phase", f"{p.name if p else ''} · {V_PHASE_DEFS.get(v.phase_key, {}).get('label', v.phase_key)}")
+    s.commit()
+    return _vcycle_payload(s, p)
 
 # ---------------- API : Tasks ----------------
 def task_dict(t: Task) -> dict:
@@ -2246,6 +2417,14 @@ MANUAL_FEATURES = [
         "Diagramme de Gantt des tâches avec dépendances temporelles.",
         "Courbe d'avancement « planifié vs réel » (burn-up) pour repérer retard/avance.",
         "Jalons, avancement pondéré et santé du projet en un coup d'œil."]),
+    ("Cycle en V — validation", "Le projet de validation pharma, de bout en bout", [
+        "Représentation en cycle en V : branche descendante de spécifications (VP, URS, SF, SD) et branche montante de qualification (FAT, SAT, IQ, OQ, PQ).",
+        "Entrée = dépôt du CRA + n° de Change Control (CC) : c'est le départ du chrono projet.",
+        "Sortie = approbation du rapport PQ : c'est la clôture du projet (la durée se calcule automatiquement entre les deux).",
+        "Chaque phase de qualif a deux jalons : Protocole (approuvé avant exécution) puis Rapport (approuvé après).",
+        "Modulable : on active uniquement les phases retenues pour le projet (ex. capitalisation des SAT → refaire seulement la PQ). Un interrupteur par phase.",
+        "On glisse les documents du projet (module Documents) dans les phases et on saisit leur date d'approbation (l'approbation réelle se fait dans le QMS).",
+        "Barre d'avancement de la validation + statut par phase (À faire / Protocole approuvé / Rapport approuvé)."]),
     ("Tâches", "Création, suivi et assignation", [
         "Statut, priorité, échéance, estimation, sous-tâches, étiquettes.",
         "Commentaires avec @mentions (notification de la personne citée).",

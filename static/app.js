@@ -1980,9 +1980,13 @@ async function openDocDetail(docId){
   const lockInfo=d.locked_by
     ? `<div class="meta" style="color:${isLockedByMe?'var(--ok)':'var(--bad)'};font-weight:600">🔒 Verrouillé par ${esc(d.locked_by_name)}${isLockedByMe?' (toi)':''} — ${fmtDateTime(d.locked_at)}</div>`
     : `<div class="meta" style="color:var(--ok)">🔓 Disponible pour édition</div>`;
+  // Responsable du document : assigné, sinon créateur. Seul lui (ou un admin) édite.
+  const canHold = IS_ADMIN || ((d.assigned_to||d.created_by)===ME.id);
   let actionBtns='';
   if(!d.locked_by){
-    actionBtns=`<button class="btn primary sm" data-doc-lock="${d.id}">🔒 Verrouiller pour éditer</button>`;
+    actionBtns = canHold
+      ? `<button class="btn primary sm" data-doc-lock="${d.id}">🔒 Verrouiller pour éditer</button>`
+      : `<span class="meta">✋ Édition réservée à <strong>${esc(d.assigned_to_name||d.created_by_name||'la personne responsable')}</strong>. Il faut d'abord que le document te soit transféré.</span>`;
   }else if(isLockedByMe){
     actionBtns=`<button class="btn primary sm" id="btnUploadNewVersion">⬆ Uploader nouvelle version</button>
                 <button class="btn ghost sm" data-doc-unlock="${d.id}">Libérer le verrou</button>`;
@@ -2397,10 +2401,13 @@ function scrollListToComment(cid){
 }
 function renderDocViewerSide(d, cur){
   const isLockedByMe=d.locked_by===ME.id;
+  const canHold = IS_ADMIN || ((d.assigned_to||d.created_by)===ME.id);
   const dlUrl=cur?'/api/documents/'+d.id+'/versions/'+cur.id+'/download':'';
   let actions='';
   if(cur) actions+=`<a class="btn sm" href="${dlUrl}">⬇ Télécharger</a>`;
-  if(!d.locked_by) actions+=`<button class="btn sm primary" data-doc-lock="${d.id}">🔒 Verrouiller / éditer</button>`;
+  if(!d.locked_by) actions+= canHold
+    ? `<button class="btn sm primary" data-doc-lock="${d.id}">🔒 Verrouiller / éditer</button>`
+    : `<span class="meta" style="font-size:11px">✋ Édition réservée à ${esc(d.assigned_to_name||d.created_by_name||'la personne responsable')}</span>`;
   else if(isLockedByMe) actions+=`<button class="btn sm primary" id="dvUpload">⬆ Nouvelle version</button><button class="btn sm ghost" data-doc-unlock="${d.id}">Libérer</button>`;
   else actions+=`<span class="pill" style="background:rgba(220,38,38,.12);color:var(--bad)">🔒 ${esc(d.locked_by_name||'?')}</span>${IS_ADMIN?`<button class="btn sm ghost" data-doc-unlock="${d.id}">Forcer (admin)</button>`:''}`;
   actions+=`<button class="btn sm ghost" id="dvWorkflow">⚙ Workflow</button>`;

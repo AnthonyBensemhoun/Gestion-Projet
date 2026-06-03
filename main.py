@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlmodel import SQLModel, Field, Session, create_engine, select
 from sqlalchemy import text, update as sa_update, LargeBinary, Column
-from urllib.parse import quote as _urlquote
+from urllib.parse import quote as _urlquote, urlparse as _urlparse
 from typing import Optional, List
 from datetime import date, datetime, timedelta
 from passlib.hash import bcrypt
@@ -40,6 +40,11 @@ _default_db = "sqlite:///" + os.path.join(DATA_DIR, "atelier.db").replace("\\", 
 DB_URL = os.environ.get("DATABASE_URL", _default_db)
 # Sécurité : cookies Secure par défaut (mettre COOKIE_SECURE=0 pour un test en HTTP local).
 SECURE_COOKIES = os.environ.get("COOKIE_SECURE", "1") != "0"
+# Durée de validité d'une session (jours) — réduite par défaut pour limiter le vol de session.
+try:
+    SESSION_DAYS = max(1, int(os.environ.get("SESSION_DAYS", "7")))
+except ValueError:
+    SESSION_DAYS = 7
 if DB_URL.startswith("postgresql://") or DB_URL.startswith("postgres://"):
     import ssl as _ssl
     DB_URL = DB_URL.replace("postgresql://", "postgresql+pg8000://", 1).replace("postgres://", "postgresql+pg8000://", 1)
@@ -326,9 +331,28 @@ _CSP = ("default-src 'self'; "
         "connect-src 'self'; "
         "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 
+def _same_origin(request: Request) -> bool:
+    """Vrai si la requête provient de notre propre origine (anti-CSRF)."""
+    host = request.headers.get("host", "")
+    origin = request.headers.get("origin")
+    if origin:
+        return _urlparse(origin).netloc == host
+    ref = request.headers.get("referer")
+    if ref:
+        return _urlparse(ref).netloc == host
+    # Ni Origin ni Referer : un navigateur en envoie toujours au moins un pour une
+    # mutation, donc une attaque CSRF serait bloquée plus haut. On laisse passer ce
+    # cas rare (clients non-navigateur) pour ne pas bloquer d'usage légitime.
+    return True
+
 @app.middleware("http")
 async def _security_headers(request: Request, call_next):
-    resp = await call_next(request)
+    # Protection CSRF : toute requête mutante doit venir de notre origine.
+    if request.method in ("POST", "PUT", "DELETE", "PATCH") and not _same_origin(request):
+        from fastapi.responses import PlainTextResponse
+        resp = PlainTextResponse("Requête refusée (origine non autorisée).", status_code=403)
+    else:
+        resp = await call_next(request)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "same-origin"
@@ -491,13 +515,13 @@ def login(request: Request, email: str = Form(...), password: str = Form(...),
     _LOGIN_FAILS.pop(ip, None)                 # succès : on réinitialise
     now = datetime.utcnow()
     token = secrets.token_urlsafe(32)
-    s.add(Session_(token=token, user_id=user.id, expires=now + timedelta(days=30)))
+    s.add(Session_(token=token, user_id=user.id, expires=now + timedelta(days=SESSION_DAYS)))
     s.execute(sa_update(User).where(User.id == user.id).values(last_login=now, last_seen=now))
     _audit(s, user.name, "Connexion", f"Email : {user.email}")
     s.commit()
     resp = RedirectResponse("/", status_code=303)
     resp.set_cookie("atelier_session", token, httponly=True, samesite="lax",
-                    secure=SECURE_COOKIES, max_age=30*86400, path="/")
+                    secure=SECURE_COOKIES, max_age=SESSION_DAYS*86400, path="/")
     return resp
 
 @app.get("/logout")
@@ -1907,6 +1931,12 @@ def delete_doc_comment(cid: int, u: User = Depends(require_user), s: Session = D
 def lock_document(doc_id: int, u: User = Depends(require_user), s: Session = Depends(get_session)):
     d = s.get(Document, doc_id)
     if not d: raise HTTPException(404, "Document introuvable")
+    # Cohérence avec les transitions/upload : seul le responsable (assigné, sinon
+    # créateur) ou un admin peut verrouiller pour éditer.
+    holder = d.assigned_to or d.created_by
+    if u.role != "admin" and holder and holder != u.id:
+        raise HTTPException(403, f"Ce document est sous la responsabilité de {_user_name(s, holder)} : "
+                                 "tu ne peux pas le verrouiller pour l'éditer.")
     if d.locked_by and d.locked_by != u.id:
         raise HTTPException(409, f"Déjà verrouillé par {_user_name(s, d.locked_by)}")
     s.execute(sa_update(Document).where(Document.id == doc_id)

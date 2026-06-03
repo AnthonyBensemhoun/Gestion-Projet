@@ -22,11 +22,14 @@ set "ADMIN_PASSWORD=admin"
 if not exist "%HELIX_DATA%" mkdir "%HELIX_DATA%"
 
 REM ---- Python + dependances (installation auto la 1re fois) ----
+REM Reseaux d'entreprise avec proxy SSL (Zscaler...) : on fait confiance aux
+REM serveurs de paquets Python (sinon "CERTIFICATE_VERIFY_FAILED").
+set "PIP_TRUST=--trusted-host pypi.org --trusted-host files.pythonhosted.org --trusted-host pypi.python.org"
 if not exist ".venv\Scripts\python.exe" (
   echo Premiere utilisation : installation de l'environnement ^(1-2 min^)...
   py -m venv .venv 2>nul || python -m venv .venv
-  ".venv\Scripts\python.exe" -m pip install --upgrade pip
-  ".venv\Scripts\python.exe" -m pip install -r requirements.txt
+  ".venv\Scripts\python.exe" -m pip install --upgrade pip %PIP_TRUST%
+  ".venv\Scripts\python.exe" -m pip install -r requirements.txt %PIP_TRUST%
 )
 
 echo.

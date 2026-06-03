@@ -1716,6 +1716,7 @@ const DOC_PHASES=[
 ];
 const DOC_PHASE_BY_KEY=Object.fromEntries(DOC_PHASES.map(p=>[p.key,p]));
 const DOC_TERMINAL_PHASE='transmis_qms';   // cycle clôturé : hors atelier (chez D.O.T / QMS)
+const DOT_QMS_URL='https://alivedx.workvivo.com/apps';   // portail D.O.T / QMS officiel
 const DOC_ACTION_LABELS={lecture:'Lecture', redaction:'Rédaction'};
 const DOC_ACTION_ICONS={lecture:'📖', redaction:'✍️'};
 // Petite pastille colorée "Pour Lecture / Pour Rédaction"
@@ -1902,7 +1903,10 @@ async function openDocDetail(docId){
       ? `<span class="ava" style="width:26px;height:26px;font-size:11px;background:${avaColor(d.assigned_to)}">${initials(d.assigned_to_name)}</span>
          <span>Actuellement chez <strong>${esc(d.assigned_to_name)}</strong> — phase <strong style="color:${curPhase.color}">${curPhase.label}</strong></span>${docActionChip(d.assigned_action)}`
       : `<span>Phase <strong style="color:${curPhase.color}">${curPhase.label}</strong> — non assigné</span>`}
-  </div>`;
+  </div>
+  ${phaseIdx>=docPhaseIndex('revue_qa')
+    ? `<a href="${DOT_QMS_URL}" target="_blank" rel="noopener" class="btn sm" style="margin-top:10px;border-color:rgba(79,70,229,.3);color:var(--acc);font-weight:700">🏢 Ouvrir D.O.T / QMS ↗</a>`
+    : ''}`;
 
   // ----- Verrou / édition -----
   const lockInfo=d.locked_by

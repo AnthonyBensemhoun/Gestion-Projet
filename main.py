@@ -1970,6 +1970,7 @@ MANUAL_FEATURES = [
     ("Documents — Workflow qualité", "Circuit type Veeva, du brouillon au QMS", [
         "Phases : Rédaction → Revue équipe → Revue QA → Approbation → Prêt QMS → Transmis au QMS.",
         "« Transmis au QMS » clôt le cycle : le document est parti chez D.O.T / dans le QMS officiel, il n'est plus sous la responsabilité de l'atelier (seul un admin peut rouvrir).",
+        "Dès la phase Revue QA, un bouton « Ouvrir D.O.T / QMS » donne accès au portail officiel (Workvivo) dans un nouvel onglet.",
         "À chaque push vers une personne, on précise l'action attendue : Lecture (relire/vérifier) ou Rédaction (produire/modifier).",
         "Timeline animée : où en est le document et chez qui.",
         "Verrouillage / nouvelle version (check-out / check-in), historique complet.",

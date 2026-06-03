@@ -1537,20 +1537,6 @@ def transition_document(doc_id: int, data: dict, u: User = Depends(require_user)
         action_type = ""
     note = (data.get("note") or "").strip()
     phase_lbl = DOC_PHASE_LABELS.get(phase, phase)
-    # --- Signature électronique obligatoire (esprit 21 CFR Part 11) ---
-    if phase in DOC_SIGN_PHASES:
-        password = data.get("password") or ""
-        reason = (data.get("reason") or "").strip()
-        if not password or not reason:
-            raise HTTPException(400, "Signature requise : mot de passe et motif obligatoires pour cette phase.")
-        if not bcrypt.verify(password, u.password_hash):
-            raise HTTPException(403, "Signature refusée : mot de passe incorrect.")
-        cur = s.exec(select(DocumentVersion).where(DocumentVersion.document_id == doc_id)
-                    .order_by(DocumentVersion.version.desc())).first()
-        s.add(DocSignature(document_id=doc_id, user_id=u.id, user_name=u.name,
-                           phase=phase, meaning=phase_lbl, reason=reason,
-                           version=cur.version if cur else 0))
-        _audit(s, u.name, "Signature électronique", f"{d.name} — {phase_lbl} : {reason}")
     # Pousser le document = passer la main : on libère le verrou (check-in) pour que
     # la personne assignée puisse à son tour le verrouiller et uploader sa version.
     s.execute(sa_update(Document).where(Document.id == doc_id).values(
@@ -2042,6 +2028,7 @@ MANUAL_FEATURES = [
         "Repère les personnes en surcharge ; estimation IA possible."]),
     ("Équipe & rôles", "Gestion des accès", [
         "Rôles : Utilisateur, Team Leader (gère les projets), Administrateur.",
+        "Trigramme : chaque membre définit ses initiales (ex : ABS) dans la section Équipe. Il sert de signature : il s'appose sur le document (nom + version) à chaque validation.",
         "Amorçage : tant qu'aucun projet n'existe, tout le monde peut créer le premier ; ensuite la création revient aux Team Leaders et admins.",
         "Statut en ligne et dernière connexion de chaque membre.",
         "Invitations et rappels par email."]),
@@ -2054,8 +2041,10 @@ MANUAL_FEATURES = [
         "Le circuit s'arrête à la Revue QA : à partir de là, le document part dans D.O.T / QMS (Salesforce) et n'est plus sous la responsabilité de l'atelier (seul un admin peut le rouvrir).",
         "Pousser un document en Revue QA n'assigne personne en interne et ouvre automatiquement le portail D.O.T / QMS pour l'y déposer ; un bouton « Ouvrir D.O.T / QMS » reste disponible.",
         "À chaque push vers une personne (Rédaction / Revue équipe), on précise l'action attendue : Lecture (relire/vérifier) ou Rédaction (produire/modifier).",
+        "Validation = signature : pousser exige ton trigramme, qui signe la version. Les fichiers se téléchargent nommés Nom_TRIGRAMME_Vn (ex : Planning_ABS_V2).",
+        "On lit toujours la dernière version : seule la plus récente est téléchargeable (les versions antérieures sont réservées aux admins pour l'audit).",
         "Timeline animée : où en est le document et chez qui.",
-        "Verrouillage / nouvelle version (check-out / check-in), historique complet.",
+        "Verrouillage / nouvelle version (check-out / check-in), historique complet. Pousser le document libère le verrou pour que la personne suivante puisse éditer.",
         "Au verrouillage, l'app enregistre une copie locale de la dernière version dans le dossier de travail que tu choisis (double de sécurité réseau ; sélecteur de dossier sur Edge/Chrome, sinon téléchargement).",
         "Un document « chez » un collègue ne peut être poussé que par lui — ou un admin."]),
     ("Lecteur de document", "Aperçu et commentaires ancrés", [
@@ -2063,7 +2052,7 @@ MANUAL_FEATURES = [
         "Commentaires de toute l'équipe + @mentions.",
         "Place un commentaire à un endroit précis du document (épingles)."]),
     ("Diffusion & Lu et compris", "Suivi de lecture", [
-        "Désigne qui doit lire un document approuvé.",
+        "Désigne qui doit lire un document.",
         "Chaque personne accuse réception ; suivi du taux X/Y.",
         "Filigrane « COPIE NON CONTRÔLÉE » sur les aperçus."]),
     ("Répertoires & liens", "Organisation documentaire", [

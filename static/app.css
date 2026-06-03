@@ -326,7 +326,7 @@ section{animation:fadeIn var(--t-med) both}
 /* ---- PANEL ---- */
 .panel{
   background:var(--panel);border:1px solid var(--line);
-  border-radius:var(--r-lg);padding:20px;box-shadow:var(--shadow-sm);
+  border-radius:var(--r-lg);padding:22px;box-shadow:var(--shadow-sm);
 }
 .sec-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px}
 .sec-h h2{font-size:18px}
@@ -348,7 +348,7 @@ section{animation:fadeIn var(--t-med) both}
 
 /* ---- TAGS / PILLS ---- */
 .tag{display:inline-block;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:700;letter-spacing:.3px}
-.tag.todo{background:#eceae3;color:#6f6a5e}
+.tag.todo{background:#eef1f5;color:#64748b}
 .tag.prog{background:rgba(47,127,214,.14);color:var(--info)}
 .tag.done{background:rgba(46,158,91,.14);color:var(--ok)}
 .tag.late{background:rgba(214,56,63,.14);color:var(--bad)}
@@ -366,13 +366,13 @@ section{animation:fadeIn var(--t-med) both}
 }
 .field input:focus,.field select:focus,.field textarea:focus{
   border-color:var(--acc);background:#fff;
-  box-shadow:0 0 0 3px rgba(79,70,229,.10);
+  box-shadow:0 0 0 3px rgba(79,70,229,.12);
 }
 
 /* ---- MODALS ---- */
 .modal-bg{
   position:fixed;inset:0;
-  background:rgba(43,41,37,.48);
+  background:rgba(15,23,42,.45);
   backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
   display:none;place-items:center;
   z-index:50;padding:20px;
@@ -382,7 +382,7 @@ section{animation:fadeIn var(--t-med) both}
 @keyframes modalIn{from{opacity:0;transform:scale(.96) translateY(12px)}to{opacity:1;transform:none}}
 .modal{
   background:var(--panel);
-  border:1px solid rgba(255,255,255,.5);
+  border:1px solid var(--line);
   border-radius:var(--r-xl);padding:28px;
   width:min(540px,100%);
   box-shadow:var(--shadow-lg);
@@ -399,7 +399,7 @@ section{animation:fadeIn var(--t-med) both}
   font-weight:700;color:#fff;flex-shrink:0;
   font-family:'Space Grotesk';font-size:16px;
 }
-.pill{font-size:11px;padding:3px 9px;border-radius:7px;background:#eceae3;color:var(--mut);font-weight:600}
+.pill{font-size:11px;padding:3px 9px;border-radius:7px;background:#eef1f5;color:var(--mut);font-weight:600}
 .pill.absent{background:rgba(217,131,0,.14);color:var(--warn)}
 .pill.ok{background:rgba(46,158,91,.12);color:var(--ok)}
 .pill.admin{background:rgba(79,70,229,.14);color:var(--acc)}
@@ -423,7 +423,7 @@ section{animation:fadeIn var(--t-med) both}
 .empty{text-align:center;color:var(--mut);padding:52px 20px;font-style:italic;font-size:14px}
 
 /* Progress bar */
-.progress{height:7px;background:#eceae3;border-radius:99px;overflow:hidden;margin-top:10px}
+.progress{height:7px;background:#eef1f5;border-radius:99px;overflow:hidden;margin-top:10px}
 .progress i{
   display:block;height:100%;
   background:linear-gradient(90deg,var(--acc),var(--acc2));
@@ -869,7 +869,7 @@ input[type=checkbox]{accent-color:var(--acc);width:16px;height:16px;cursor:point
   border-radius:var(--r-lg);padding:18px;box-shadow:var(--shadow-sm);
 }
 .capacity-header{display:flex;align-items:center;gap:12px;margin-bottom:14px}
-.capacity-bar-wrap{background:#eceae3;border-radius:99px;height:10px;overflow:hidden;flex:1}
+.capacity-bar-wrap{background:#eef1f5;border-radius:99px;height:10px;overflow:hidden;flex:1}
 .capacity-bar-fill{height:100%;border-radius:99px;transition:width .6s cubic-bezier(.4,0,.2,1)}
 .capacity-bar-fill.ok{background:linear-gradient(90deg,var(--ok),#4fbf7e)}
 .capacity-bar-fill.warn{background:linear-gradient(90deg,var(--warn),#f5c542)}

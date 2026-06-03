@@ -314,6 +314,20 @@ app = FastAPI(title="Atelier")
 templates = Jinja2Templates(directory=os.path.join(RESOURCE_DIR, "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(RESOURCE_DIR, "static")), name="static")
 
+# Cache-busting : version dérivée de la date de modification des fichiers statiques.
+# Change automatiquement à chaque déploiement → les navigateurs des collègues
+# rechargent toujours la dernière version du CSS/JS (fini le vieux cache).
+def _asset_version() -> str:
+    latest = 0
+    for rel in ("static/app.js", "static/app.css"):
+        try:
+            latest = max(latest, int(os.path.getmtime(os.path.join(RESOURCE_DIR, rel))))
+        except OSError:
+            pass
+    return str(latest or int(datetime.utcnow().timestamp()))
+
+ASSET_VERSION = _asset_version()
+
 @app.on_event("startup")
 def on_startup():
     SQLModel.metadata.create_all(engine)
@@ -393,7 +407,8 @@ def home(request: Request, s: Session = Depends(get_session)):
         "app_logo": _setting(s, "app_logo", ""),
         "is_admin": u.role == "admin",
         "can_manage_projects": u.role in ("admin", "lead"),
-        "must_change_password": u.must_change_password
+        "must_change_password": u.must_change_password,
+        "asset_v": ASSET_VERSION,
     })
 
 @app.get("/login", response_class=HTMLResponse)

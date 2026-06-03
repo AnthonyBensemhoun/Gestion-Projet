@@ -648,6 +648,12 @@ input[type=checkbox]{accent-color:var(--acc);width:16px;height:16px;cursor:point
 .me-widget{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden;display:flex;flex-direction:column;animation:kpiIn .4s cubic-bezier(.4,0,.2,1) both;transition:box-shadow var(--t-fast),transform var(--t-fast)}
 .me-widget:hover{box-shadow:var(--shadow-sm)}
 .me-widget-head{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;font-size:12.5px;font-weight:700;border-bottom:1px solid var(--line);background:var(--panel2)}
+.mw-head-l{display:inline-flex;align-items:center;gap:4px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mw-grip{cursor:grab;color:var(--mut);font-size:13px;opacity:.55;user-select:none}
+.me-widget:hover .mw-grip{opacity:.9}
+.mw-grip:active{cursor:grabbing}
+.me-widget.dragging{opacity:.45;box-shadow:var(--shadow-lg)}
+.me-widget.drag-over{outline:2px dashed var(--acc);outline-offset:2px}
 .me-widget-head .x{opacity:.5;transition:opacity var(--t-fast)}
 .me-widget:hover .me-widget-head .x{opacity:1}
 .me-widget-body{padding:12px;flex:1}

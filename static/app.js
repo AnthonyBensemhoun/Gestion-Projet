@@ -1426,7 +1426,7 @@ async function renderMe(){
       </div>
     </div>`).join('')||'<div class="empty">Aucun projet pour toi.'+(CAN_PROJECTS?' Crée-en un via « + Nouveau ».':'')+'</div>';
 
-  el.innerHTML=hero+kpis+meWidgetsHtml()+`<div class="kpi-grid2" style="margin-top:18px">
+  el.innerHTML=hero+kpis+`<div id="meWidgetsWrap">${meWidgetsHtml()}</div>`+`<div class="kpi-grid2" style="margin-top:18px">
     <div class="panel"><div class="sec-h" style="margin-bottom:8px"><h2 style="font-size:15px">📁 Mes projets (${projStats.length})</h2></div>
       <div style="max-height:420px;overflow:auto">${projRows}</div></div>
     <div class="panel"><div class="sec-h" style="margin-bottom:8px"><h2 style="font-size:15px">✓ Mes tâches (${myTasks.length})</h2></div>
@@ -1484,10 +1484,18 @@ function meWidgetsHtml(){
 }
 function meWidgetCard(k){
   const def=ME_WIDGET_DEFS[k];if(!def)return '';
-  return `<div class="me-widget" data-widget="${k}">
-    <div class="me-widget-head"><span>${def.ic} ${def.label}</span><button class="x" data-rm-widget="${k}" title="Retirer">✕</button></div>
+  return `<div class="me-widget" data-widget="${k}" draggable="true">
+    <div class="me-widget-head"><span class="mw-head-l"><span class="mw-grip" title="Glisser pour réorganiser">⠿</span> ${def.ic} ${def.label}</span><button class="x" data-rm-widget="${k}" title="Retirer">✕</button></div>
     <div class="me-widget-body">${meWidgetBody(k)}</div>
   </div>`;
+}
+// Re-rend uniquement la zone widgets (sans recharger les prefs serveur → pas de
+// perte de l'ajout). Sert aussi de base au glisser-déposer.
+function refreshMeWidgets(){
+  const wrap=$('meWidgetsWrap');
+  if(!wrap){renderMe();return;}
+  wrap.innerHTML=meWidgetsHtml();
+  wireMeWidgets();
 }
 function meWidgetBody(k){
   if(k==='clock') return `<div class="mw-clock" id="mwClock">—</div>`;
@@ -1523,12 +1531,37 @@ function wireMeWidgets(){
     menu.innerHTML=avail.map(k=>`<div class="me-widget-opt" data-add-widget="${k}">${ME_WIDGET_DEFS[k].ic} ${ME_WIDGET_DEFS[k].label}</div>`).join('');
     menu.classList.toggle('hidden');
     menu.querySelectorAll('[data-add-widget]').forEach(o=>o.addEventListener('click',()=>{
-      const arr=getMeWidgets();arr.push(o.dataset.addWidget);setMeWidgets(arr);renderMe();
+      const arr=getMeWidgets();arr.push(o.dataset.addWidget);setMeWidgets(arr);refreshMeWidgets();
     }));
   });
   document.querySelectorAll('[data-rm-widget]').forEach(b=>b.addEventListener('click',()=>{
-    setMeWidgets(getMeWidgets().filter(k=>k!==b.dataset.rmWidget));renderMe();
+    setMeWidgets(getMeWidgets().filter(k=>k!==b.dataset.rmWidget));refreshMeWidgets();
   }));
+  // Réorganisation par glisser-déposer (widgets modulaires)
+  let _dragKey=null;
+  document.querySelectorAll('.me-widget[draggable]').forEach(card=>{
+    card.addEventListener('dragstart',e=>{
+      // ne pas démarrer un drag quand on interagit avec un champ du widget
+      if(e.target.closest('input,textarea,button,select,a')){e.preventDefault();return;}
+      _dragKey=card.dataset.widget;card.classList.add('dragging');
+      e.dataTransfer.effectAllowed='move';
+      try{e.dataTransfer.setData('text/plain',_dragKey);}catch(_){}
+    });
+    card.addEventListener('dragend',()=>{card.classList.remove('dragging');_dragKey=null;
+      document.querySelectorAll('.me-widget.drag-over').forEach(c=>c.classList.remove('drag-over'));});
+    card.addEventListener('dragover',e=>{e.preventDefault();e.dataTransfer.dropEffect='move';card.classList.add('drag-over');});
+    card.addEventListener('dragleave',()=>card.classList.remove('drag-over'));
+    card.addEventListener('drop',e=>{
+      e.preventDefault();card.classList.remove('drag-over');
+      const from=_dragKey, to=card.dataset.widget;
+      if(!from||from===to)return;
+      const arr=getMeWidgets();const fi=arr.indexOf(from);
+      if(fi<0)return;
+      arr.splice(fi,1);                       // retire l'élément déplacé
+      arr.splice(arr.indexOf(to),0,from);     // l'insère devant la cible
+      setMeWidgets(arr);refreshMeWidgets();
+    });
+  });
   // Horloge
   if(_meClock){clearInterval(_meClock);_meClock=null;}
   if($('mwClock')){

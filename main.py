@@ -485,6 +485,18 @@ def on_startup():
         if not _setting(s, "branding_helix"):
             _set_setting(s, "app_name", "Helix")
             _set_setting(s, "branding_helix", "1")
+        # Auto-nettoyage des verrous orphelins (hérités de l'ancienne logique) :
+        # un document verrouillé par quelqu'un qui n'en est pas le responsable
+        # (assigné/créateur) et qui n'est pas admin → on libère le verrou.
+        admins = {x.id for x in s.exec(select(User).where(User.role == "admin")).all()}
+        freed = 0
+        for d in s.exec(select(Document).where(Document.locked_by != None)).all():  # noqa: E711
+            holder = d.assigned_to or d.created_by
+            if d.locked_by != holder and d.locked_by not in admins:
+                d.locked_by = None; d.locked_at = None; s.add(d); freed += 1
+        if freed:
+            s.commit()
+            print(f"[Atelier] {freed} verrou(x) orphelin(s) libéré(s).")
 
 # ---------------- Pages ----------------
 @app.get("/", response_class=HTMLResponse)

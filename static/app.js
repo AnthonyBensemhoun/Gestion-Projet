@@ -2554,7 +2554,7 @@ async function saveDoc(){
   fd.append('description',$('f_docDesc').value.trim());
   fd.append('note',$('f_docNote').value.trim());
   fd.append('doc_type',$('f_docType').value);
-  fd.append('folder',$('f_docFolder')?$('f_docFolder').value.trim():'');
+  fd.append('folder',_selectedFolder());
   const pid=$('f_docProject').value;
   if(pid) fd.append('project_id',pid);
   fd.append('file',file);
@@ -2614,10 +2614,34 @@ async function deleteDoc(id){
   try{await api('/api/documents/'+id,{method:'DELETE'});closeModal('docDetailModal');toast('Document supprimé','warn');renderDocs();}
   catch(e){toast(e.message,'err');}
 }
+const DOC_STD_FOLDERS=['Validation','Qualification','Conception','Production','Réglementaire',
+  'Analyse de risques','Rapports','Procédures (SOP)','Spécifications','Fournisseurs'];
+function _populateFolderSelect(selected){
+  const sel=$('f_docFolderSelect'); if(!sel) return;
+  // Répertoires déjà utilisés (dynamique) + standards, dédupliqués, triés
+  const used=[...new Set((state.documents||[]).map(d=>(d.folder||'').trim()).filter(Boolean))];
+  const all=[...new Set([...used, ...DOC_STD_FOLDERS])].sort((a,b)=>a.localeCompare(b,'fr'));
+  sel.innerHTML='<option value="">— Aucun —</option>'
+    + all.map(f=>`<option value="${esc(f)}">📁 ${esc(f)}</option>`).join('')
+    + '<option value="__other__">✏️ Autre (saisir un nouveau)…</option>';
+  if(selected && all.includes(selected)) sel.value=selected; else sel.value='';
+  const custom=$('f_docFolderCustom'); if(custom){custom.value='';custom.classList.add('hidden');}
+  sel.onchange=()=>{
+    const other=sel.value==='__other__';
+    if(custom){custom.classList.toggle('hidden',!other); if(other){custom.value='';custom.focus();}}
+  };
+}
+function _selectedFolder(){
+  const sel=$('f_docFolderSelect'); if(!sel) return '';
+  if(sel.value==='__other__'){const c=$('f_docFolderCustom');return c?c.value.trim():'';}
+  return sel.value;
+}
 function openDocCreate(){
   $('f_docProject').innerHTML='<option value="">— Document de service (général) —</option>'+state.projects.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
   $('docCreateModal').classList.add('show');
-  $('f_docFile').value='';$('f_docName').value='';if($('f_docFolder'))$('f_docFolder').value='';
+  $('f_docFile').value='';$('f_docName').value='';
+  if($('f_docDesc'))$('f_docDesc').value='';if($('f_docNote'))$('f_docNote').value='';
+  _populateFolderSelect('');
 }
 // Auto-remplit le nom du document depuis le fichier choisi (modifiable ensuite)
 if($('f_docFile')) $('f_docFile').addEventListener('change',function(){

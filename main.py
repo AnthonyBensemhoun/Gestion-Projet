@@ -12,7 +12,7 @@ from urllib.parse import quote as _urlquote
 from typing import Optional, List
 from datetime import date, datetime, timedelta
 from passlib.hash import bcrypt
-import secrets, os, json, io, re, smtplib, threading
+import secrets, os, sys, json, io, re, smtplib, threading
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -21,8 +21,23 @@ try:
 except ImportError:
     anthropic = None
 
+# ---------------- Chemins (compatibles exécutable PyInstaller) ----------------
+# RESOURCE_DIR : où lire les fichiers embarqués (templates, static).
+#   - En .exe PyInstaller : dossier temporaire d'extraction (sys._MEIPASS).
+#   - En dev/serveur : dossier du fichier main.py.
+# DATA_DIR : où écrire les données persistantes (base SQLite, uploads).
+#   - En .exe : à côté de l'exécutable (persistant, jamais effacé).
+#   - En dev/serveur : dossier du projet.
+if getattr(sys, "frozen", False):
+    RESOURCE_DIR = sys._MEIPASS
+    DATA_DIR = os.path.dirname(sys.executable)
+else:
+    RESOURCE_DIR = os.path.dirname(os.path.abspath(__file__))
+    DATA_DIR = RESOURCE_DIR
+
 # ---------------- Config ----------------
-DB_URL = os.environ.get("DATABASE_URL", "sqlite:///./atelier.db")
+_default_db = "sqlite:///" + os.path.join(DATA_DIR, "atelier.db").replace("\\", "/")
+DB_URL = os.environ.get("DATABASE_URL", _default_db)
 SECRET_ADMIN_TOKEN = os.environ.get("ADMIN_BOOTSTRAP_TOKEN", "atelier-setup")
 if DB_URL.startswith("postgresql://") or DB_URL.startswith("postgres://"):
     import ssl as _ssl
@@ -131,9 +146,10 @@ class Document(SQLModel, table=True):
     reference: str = ""        # référence (non utilisée — réservée)
     obsolete: bool = Field(default=False)  # marqué obsolète (remplacé par un autre doc)
     status: str = "draft"      # draft / review / approved (dérivé de la phase)
-    phase: str = "redaction"   # workflow : redaction / revue_equipe / revue_qa / approbation / pret_qms
+    phase: str = "redaction"   # workflow : redaction / revue_equipe / revue_qa / approbation / pret_qms / transmis_qms
     phase_since: Optional[datetime] = Field(default=None)  # entrée dans la phase actuelle (SLA)
     assigned_to: Optional[int] = Field(default=None)  # personne chez qui le document se trouve actuellement
+    assigned_action: str = ""  # action attendue de la personne assignée : "lecture" ou "redaction"
     locked_by: Optional[int] = Field(default=None)   # user_id ayant verrouillé pour édition
     locked_at: Optional[datetime] = Field(default=None)
     created_by: Optional[int] = Field(default=None)
@@ -189,6 +205,7 @@ class DocWorkflowEvent(SQLModel, table=True):
     document_id: int = Field(index=True)
     phase: str = ""
     assigned_to: Optional[int] = Field(default=None)
+    action_type: str = ""  # "lecture" ou "redaction" : ce qui est attendu de la personne assignée
     moved_by: Optional[int] = Field(default=None)
     note: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -294,8 +311,8 @@ def require_project_manager(request: Request, s: Session = Depends(get_session))
 
 # ---------------- App ----------------
 app = FastAPI(title="Atelier")
-templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory=os.path.join(RESOURCE_DIR, "templates"))
+app.mount("/static", StaticFiles(directory=os.path.join(RESOURCE_DIR, "static")), name="static")
 
 @app.on_event("startup")
 def on_startup():
@@ -336,6 +353,10 @@ def on_startup():
              "ALTER TABLE project ADD COLUMN lead_id INTEGER"),
             ("ALTER TABLE document ADD COLUMN IF NOT EXISTS folder VARCHAR DEFAULT ''",
              "ALTER TABLE document ADD COLUMN folder VARCHAR DEFAULT ''"),
+            ("ALTER TABLE document ADD COLUMN IF NOT EXISTS assigned_action VARCHAR DEFAULT ''",
+             "ALTER TABLE document ADD COLUMN assigned_action VARCHAR DEFAULT ''"),
+            ("ALTER TABLE docworkflowevent ADD COLUMN IF NOT EXISTS action_type VARCHAR DEFAULT ''",
+             "ALTER TABLE docworkflowevent ADD COLUMN action_type VARCHAR DEFAULT ''"),
         ]
         for pg_stmt, sq_stmt in migrations:
             try:
@@ -1250,16 +1271,22 @@ def ai_estimate_load(data: dict, u: User = Depends(require_admin), s: Session = 
 DOC_MAX_SIZE = 25 * 1024 * 1024  # 25 Mo
 DOC_ALLOWED_EXT = (".docx", ".doc", ".pdf", ".xlsx", ".xls", ".pptx", ".ppt", ".txt", ".md", ".csv")
 DOC_STATUS = ("draft", "review", "approved")
-# Workflow documentaire (style Veeva) — phases ordonnées avant la validation officielle QMS
-DOC_PHASES = ["redaction", "revue_equipe", "revue_qa", "approbation", "pret_qms"]
+# Workflow documentaire (style Veeva) — phases ordonnées.
+# "transmis_qms" est la phase TERMINALE : le document est parti chez D.O.T / dans
+# le QMS officiel, il n'est donc plus sous la responsabilité de l'atelier (cycle clos).
+DOC_PHASES = ["redaction", "revue_equipe", "revue_qa", "approbation", "pret_qms", "transmis_qms"]
+DOC_TERMINAL_PHASE = "transmis_qms"
 DOC_PHASE_STATUS = {  # statut "simple" dérivé de la phase (rétrocompat)
     "redaction": "draft", "revue_equipe": "review", "revue_qa": "review",
-    "approbation": "review", "pret_qms": "approved",
+    "approbation": "review", "pret_qms": "approved", "transmis_qms": "approved",
 }
 DOC_PHASE_LABELS = {
     "redaction": "Rédaction", "revue_equipe": "Revue équipe", "revue_qa": "Revue QA",
-    "approbation": "Approbation", "pret_qms": "Prêt pour QMS",
+    "approbation": "Approbation", "pret_qms": "Prêt pour QMS", "transmis_qms": "Transmis au QMS",
 }
+# Action attendue de la personne chez qui le document est poussé
+DOC_ACTIONS = ("lecture", "redaction")
+DOC_ACTION_LABELS = {"lecture": "Lecture", "redaction": "Rédaction"}
 # Types de documents (préfixe de référence)
 DOC_TYPES = {
     "SOP": "SOP", "PROTO": "Protocole", "REPORT": "Rapport",
@@ -1268,6 +1295,7 @@ DOC_TYPES = {
 # Délai indicatif max par phase (jours) — au-delà : alerte SLA (goulot)
 DOC_SLA_DAYS = {
     "redaction": 14, "revue_equipe": 5, "revue_qa": 7, "approbation": 5, "pret_qms": 0,
+    "transmis_qms": 0,
 }
 # Phases nécessitant une signature électronique (mot de passe + motif)
 DOC_SIGN_PHASES = ("approbation", "pret_qms")
@@ -1330,6 +1358,9 @@ def _doc_dict(s: Session, d: Document, versions=None, me_id=None):
         "phase_since": since.isoformat() if since else None,
         "days_in_phase": days_in_phase, "sla_days": sla_days, "sla_over": sla_over,
         "assigned_to": d.assigned_to, "assigned_to_name": _user_name(s, d.assigned_to),
+        "assigned_action": d.assigned_action or "",
+        "assigned_action_label": DOC_ACTION_LABELS.get(d.assigned_action or "", ""),
+        "is_terminal": phase == DOC_TERMINAL_PHASE,
         "locked_by": d.locked_by, "locked_by_name": _user_name(s, d.locked_by),
         "locked_at": d.locked_at.isoformat() if d.locked_at else None,
         "created_by": d.created_by, "created_by_name": _user_name(s, d.created_by),
@@ -1367,6 +1398,8 @@ def get_document(doc_id: int, u: User = Depends(require_user), s: Session = Depe
                .order_by(DocWorkflowEvent.created_at.asc())).all()
     out["workflow"] = [{
         "phase": w.phase, "assigned_to_name": _user_name(s, w.assigned_to),
+        "action_type": w.action_type or "",
+        "action_label": DOC_ACTION_LABELS.get(w.action_type or "", ""),
         "moved_by_name": _user_name(s, w.moved_by), "note": w.note,
         "created_at": w.created_at.isoformat() if w.created_at else None,
     } for w in wf]
@@ -1413,6 +1446,10 @@ def transition_document(doc_id: int, data: dict, u: User = Depends(require_user)
         holder = _user_name(s, d.assigned_to)
         raise HTTPException(403, f"Ce document est actuellement chez {holder}. "
                                  "Seul cette personne (ou un administrateur) peut le faire avancer.")
+    # Cycle clôturé : un document transmis au QMS n'est plus sous notre responsabilité.
+    if d.phase == DOC_TERMINAL_PHASE and u.role != "admin":
+        raise HTTPException(400, "Ce document est déjà transmis au QMS : le cycle est clôturé. "
+                                 "Seul un administrateur peut le rouvrir.")
     phase = data.get("phase")
     if phase not in DOC_PHASES:
         raise HTTPException(400, "Phase invalide")
@@ -1422,6 +1459,13 @@ def transition_document(doc_id: int, data: dict, u: User = Depends(require_user)
             raise HTTPException(400, "Personne assignée introuvable")
     else:
         assigned_to = None
+    # Action attendue (Lecture / Rédaction) — obligatoire dès qu'on assigne quelqu'un.
+    action_type = (data.get("action_type") or "").strip().lower()
+    if assigned_to:
+        if action_type not in DOC_ACTIONS:
+            raise HTTPException(400, "Précise l'action attendue : « lecture » ou « rédaction ».")
+    else:
+        action_type = ""
     note = (data.get("note") or "").strip()
     phase_lbl = DOC_PHASE_LABELS.get(phase, phase)
     # --- Signature électronique obligatoire (esprit 21 CFR Part 11) ---
@@ -1439,23 +1483,29 @@ def transition_document(doc_id: int, data: dict, u: User = Depends(require_user)
                            version=cur.version if cur else 0))
         _audit(s, u.name, "Signature électronique", f"{d.name} — {phase_lbl} : {reason}")
     s.execute(sa_update(Document).where(Document.id == doc_id).values(
-        phase=phase, assigned_to=assigned_to, phase_since=datetime.utcnow(),
+        phase=phase, assigned_to=assigned_to, assigned_action=action_type,
+        phase_since=datetime.utcnow(),
         status=DOC_PHASE_STATUS.get(phase, d.status)))
     s.add(DocWorkflowEvent(document_id=doc_id, phase=phase, assigned_to=assigned_to,
-                           moved_by=u.id, note=note))
+                           action_type=action_type, moved_by=u.id, note=note))
+    action_lbl = DOC_ACTION_LABELS.get(action_type, "")
     _audit(s, u.name, "Transition document", f"{d.name} → {phase}"
-           + (f" (chez {_user_name(s, assigned_to)})" if assigned_to else ""))
+           + (f" (chez {_user_name(s, assigned_to)}"
+              + (f" pour {action_lbl.lower()}" if action_lbl else "") + ")" if assigned_to else ""))
     # Notification in-app pour la personne assignée
     if assigned_to and assigned_to != u.id:
+        action_phrase = (f" pour {action_lbl.lower()}" if action_lbl else "")
         _notify(s, assigned_to, "doc_assigned",
-                f"Document assigné : {d.name}",
-                f"« {d.name} » est passé en phase « {phase_lbl} » et requiert ton action."
+                f"Document assigné{action_phrase} : {d.name}",
+                f"« {d.name} » est passé en phase « {phase_lbl} » et requiert ton action"
+                + (f" ({action_lbl})" if action_lbl else "") + "."
                 + (f"\nNote : {note}" if note else ""),
                 doc_id=doc_id, actor_id=u.id)
     s.commit()
     # L'email part via Outlook (mailto) côté client ; ici on renvoie juste les infos destinataire.
     target = s.get(User, assigned_to) if assigned_to else None
     return {"ok": True, "phase": phase,
+            "action_type": action_type, "action_label": action_lbl,
             "assignee_email": target.email if target else None,
             "assignee_name": target.name if target else None}
 
@@ -1902,8 +1952,10 @@ MANUAL_FEATURES = [
         "Déclaration des absences (congés, maladie, télétravail…).",
         "Alertes automatiques : tâches en retard, échéances proches.",
         "Cloche de notifications in-app (documents, mentions, assignations)."]),
-    ("Documents — Workflow qualité", "Circuit type Veeva avant le QMS", [
-        "Phases : Rédaction → Revue équipe → Revue QA → Approbation → Prêt QMS.",
+    ("Documents — Workflow qualité", "Circuit type Veeva, du brouillon au QMS", [
+        "Phases : Rédaction → Revue équipe → Revue QA → Approbation → Prêt QMS → Transmis au QMS.",
+        "« Transmis au QMS » clôt le cycle : le document est parti chez D.O.T / dans le QMS officiel, il n'est plus sous la responsabilité de l'atelier (seul un admin peut rouvrir).",
+        "À chaque push vers une personne, on précise l'action attendue : Lecture (relire/vérifier) ou Rédaction (produire/modifier).",
         "Timeline animée : où en est le document et chez qui.",
         "Verrouillage / nouvelle version (check-out / check-in), historique complet.",
         "Un document « chez » un collègue ne peut être poussé que par lui — ou un admin.",

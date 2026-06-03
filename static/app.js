@@ -1712,8 +1712,18 @@ const DOC_PHASES=[
   {key:'revue_qa',     label:'Revue QA',      ic:'🔬', color:'#9b59b6'},
   {key:'approbation',  label:'Approbation',   ic:'✅', color:'#f3a712'},
   {key:'pret_qms',     label:'Prêt pour QMS', ic:'🚀', color:'#2e9e5b'},
+  {key:'transmis_qms', label:'Transmis au QMS', ic:'🏢', color:'#475569'},
 ];
 const DOC_PHASE_BY_KEY=Object.fromEntries(DOC_PHASES.map(p=>[p.key,p]));
+const DOC_TERMINAL_PHASE='transmis_qms';   // cycle clôturé : hors atelier (chez D.O.T / QMS)
+const DOC_ACTION_LABELS={lecture:'Lecture', redaction:'Rédaction'};
+const DOC_ACTION_ICONS={lecture:'📖', redaction:'✍️'};
+// Petite pastille colorée "Pour Lecture / Pour Rédaction"
+function docActionChip(action){
+  const lbl=DOC_ACTION_LABELS[action];if(!lbl)return '';
+  const col=action==='lecture'?'#2f7fd6':'#b06a00';
+  return `<span class="pill" title="Action attendue" style="font-size:10px;background:${col}22;color:${col}">${DOC_ACTION_ICONS[action]||''} ${lbl}</span>`;
+}
 const DOC_TYPES={SOP:'SOP',PROTO:'Protocole',REPORT:'Rapport',FORM:'Formulaire',IT:'Instruction',DOC:'Document'};
 const DOC_SIGN_PHASES=['approbation','pret_qms'];
 function docPhaseIndex(k){return DOC_PHASES.findIndex(p=>p.key===k);}
@@ -1810,7 +1820,7 @@ async function renderDocs(){
           <span class="doc-frow-ic">📄</span>
           <div style="flex:1;min-width:0">
             <div class="doc-frow-name">${esc(d.name)} ${d.obsolete?'<span class="doc-obsolete-badge">⚠ OBSOLÈTE</span>':''}${(d.linked_tasks&&d.linked_tasks.length)?`<span class="tdl-badge" title="${d.linked_tasks.length} tâche(s) liée(s)">📎 ${d.linked_tasks.length}</span>`:''}</div>
-            <div class="meta" style="font-size:11px">${DOC_TYPES[d.doc_type]||d.doc_type} · v${d.last_version}${proj?' · '+esc(proj.name):' · Service'}${d.assigned_to_name?' · chez '+esc(d.assigned_to_name):''}</div>
+            <div class="meta" style="font-size:11px">${DOC_TYPES[d.doc_type]||d.doc_type} · v${d.last_version}${proj?' · '+esc(proj.name):' · Service'}${d.assigned_to_name?' · chez '+esc(d.assigned_to_name)+(d.assigned_action_label?' ('+d.assigned_action_label+')':''):''}</div>
           </div>
           <span class="pill" style="background:${ph.color};color:#fff;font-size:10px;white-space:nowrap">${ph.ic} ${ph.label}</span>
           ${d.sla_over?'<span class="doc-sla-badge">⏱</span>':''}
@@ -1830,7 +1840,7 @@ async function renderDocs(){
     const proj=d.project_id?projById(d.project_id):null;
     const lock=d.locked_by?`<span class="pill" style="background:rgba(214,56,63,.12);color:var(--bad);font-size:10px">🔒 ${esc(d.locked_by_name||'?')}</span>`:'';
     const assignee=d.assigned_to_name
-      ? `<div class="doc-assignee"><span class="ava" style="width:22px;height:22px;font-size:10px;background:${avaColor(d.assigned_to)}">${initials(d.assigned_to_name)}</span><span>${esc(d.assigned_to_name)}</span></div>`
+      ? `<div class="doc-assignee"><span class="ava" style="width:22px;height:22px;font-size:10px;background:${avaColor(d.assigned_to)}">${initials(d.assigned_to_name)}</span><span>${esc(d.assigned_to_name)}</span>${docActionChip(d.assigned_action)}</div>`
       : '<div class="meta" style="font-size:11px">Non assigné</div>';
     const sla=d.sla_over?`<span class="doc-sla-badge" title="Délai indicatif de ${d.sla_days} j dépassé">⏱ ${d.days_in_phase} j · SLA dépassé</span>`:'';
     const fold=d.folder?`<span class="doc-folder-tag">📁 ${esc(d.folder)}</span>`:'';
@@ -1890,7 +1900,7 @@ async function openDocDetail(docId){
   <div class="doc-holder">
     ${d.assigned_to_name
       ? `<span class="ava" style="width:26px;height:26px;font-size:11px;background:${avaColor(d.assigned_to)}">${initials(d.assigned_to_name)}</span>
-         <span>Actuellement chez <strong>${esc(d.assigned_to_name)}</strong> — phase <strong style="color:${curPhase.color}">${curPhase.label}</strong></span>`
+         <span>Actuellement chez <strong>${esc(d.assigned_to_name)}</strong> — phase <strong style="color:${curPhase.color}">${curPhase.label}</strong></span>${docActionChip(d.assigned_action)}`
       : `<span>Phase <strong style="color:${curPhase.color}">${curPhase.label}</strong> — non assigné</span>`}
   </div>`;
 
@@ -1917,19 +1927,32 @@ async function openDocDetail(docId){
   const nextIdx=Math.min(phaseIdx+1,DOC_PHASES.length-1);
   const phaseOpts=DOC_PHASES.map((ph,i)=>`<option value="${ph.key}"${i===nextIdx?' selected':''}>${ph.ic} ${ph.label}</option>`).join('');
   const assigneeOpts='<option value="">— Personne (optionnel) —</option>'+state.users.map(usr=>`<option value="${usr.id}">${esc(usr.name)}</option>`).join('');
-  const transition=!canTransition
+  const isClosed = (d.phase===DOC_TERMINAL_PHASE);
+  const transition = (isClosed && !IS_ADMIN)
+   ? `<div class="panel" style="padding:13px;margin:14px 0;border-left:3px solid #475569;background:linear-gradient(180deg,rgba(71,85,105,.07),transparent)">
+        <strong style="font-size:14px">🏢 Transmis au QMS — cycle clôturé</strong>
+        <div class="meta" style="font-size:13px;margin-top:6px">Ce document est parti dans le QMS officiel (via D.O.T). Il n'est plus sous la responsabilité de l'atelier : le circuit documentaire est terminé. Seul un administrateur peut le rouvrir en cas d'erreur.</div>
+      </div>`
+   : !canTransition
    ? `<div class="panel" style="padding:13px;margin:14px 0;border-left:3px solid var(--warn);background:linear-gradient(180deg,rgba(217,119,6,.06),transparent)">
         <strong style="font-size:14px">🔒 Document chez ${esc(d.assigned_to_name)}</strong>
         <div class="meta" style="font-size:13px;margin-top:6px">Tu ne peux pas faire avancer ce document tant qu'il se trouve chez ${esc(d.assigned_to_name)}. Seule cette personne — ou un administrateur — peut le transférer à la phase suivante.</div>
       </div>`
    : `<div class="panel" style="padding:13px;margin:14px 0;border-left:3px solid var(--acc)">
     <strong style="font-size:14px">➡️ Faire avancer / transférer le document</strong>
+    ${isClosed?'<div class="meta" style="font-size:12px;margin-top:4px;color:var(--warn)">⚠ Document déjà transmis au QMS : tu interviens en tant qu’administrateur (réouverture du cycle).</div>':''}
     <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:10px">
       <div class="field" style="flex:1;min-width:150px;margin:0"><label style="font-size:11px">Nouvelle phase</label>
         <select id="f_docPhase" class="btn sm" style="width:100%">${phaseOpts}</select></div>
       <div class="field" style="flex:1;min-width:150px;margin:0"><label style="font-size:11px">Assigner à</label>
         <select id="f_docAssignee" class="btn sm" style="width:100%">${assigneeOpts}</select></div>
     </div>
+    <div class="field" id="f_docActionField" style="margin:8px 0 0"><label style="font-size:11px">Action attendue de la personne <span style="color:var(--warn)">*</span></label>
+      <select id="f_docAction" class="btn sm" style="width:100%">
+        <option value="">— Choisir —</option>
+        <option value="redaction">✍️ Rédaction (produire / modifier le document)</option>
+        <option value="lecture">📖 Lecture (relire / vérifier / approuver)</option>
+      </select></div>
     <div class="field" style="margin:8px 0 0"><label style="font-size:11px">Note (optionnel)</label>
       <input id="f_docTransNote" placeholder="Ex : prêt pour relecture QA" style="width:100%;background:var(--panel2);border:1.5px solid var(--line);padding:7px 10px;border-radius:var(--r-sm);outline:none;font-size:13px"></div>
     <div id="docSignBlock" class="doc-sign-block hidden">
@@ -1953,7 +1976,7 @@ async function openDocDetail(docId){
     return `<div class="row" style="gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--line)">
       <span style="font-size:15px">${ph.ic}</span>
       <div style="flex:1">
-        <div style="font-size:13px"><strong style="color:${ph.color}">${ph.label}</strong>${w.assigned_to_name?` → chez ${esc(w.assigned_to_name)}`:''}</div>
+        <div style="font-size:13px"><strong style="color:${ph.color}">${ph.label}</strong>${w.assigned_to_name?` → chez ${esc(w.assigned_to_name)}`:''}${w.action_label?' '+docActionChip(w.action_type):''}</div>
         <div class="meta" style="font-size:11px">Par ${esc(w.moved_by_name||'?')} · ${fmtDateTime(w.created_at)}${w.note?' · '+esc(w.note):''}</div>
       </div>
     </div>`;
@@ -2131,6 +2154,10 @@ async function openDocDetail(docId){
   const phaseSel=$('f_docPhase');
   function toggleSign(){const need=DOC_SIGN_PHASES.includes(phaseSel.value);$('docSignBlock').classList.toggle('hidden',!need);}
   if(phaseSel){phaseSel.addEventListener('change',toggleSign);toggleSign();}
+  // L'action attendue (Lecture/Rédaction) n'a de sens que si on assigne quelqu'un
+  const assigneeSel=$('f_docAssignee'), actionField=$('f_docActionField');
+  function toggleAction(){if(actionField)actionField.classList.toggle('hidden',!assigneeSel.value);}
+  if(assigneeSel&&actionField){assigneeSel.addEventListener('change',toggleAction);toggleAction();}
 }
 
 async function ackDoc(){
@@ -2295,7 +2322,7 @@ function renderDocViewerSide(d, cur){
   // Historique du document : transitions de workflow + versions, fusionnés et triés
   const hist=[];
   (d.workflow||[]).forEach(w=>{const ph=DOC_PHASE_BY_KEY[w.phase]||{ic:'•',label:w.phase};
-    hist.push({t:w.created_at, ic:ph.ic, txt:`<strong>${esc(ph.label)}</strong>${w.assigned_to_name?' → '+esc(w.assigned_to_name):''}`, by:w.moved_by_name, note:w.note});});
+    hist.push({t:w.created_at, ic:ph.ic, txt:`<strong>${esc(ph.label)}</strong>${w.assigned_to_name?' → '+esc(w.assigned_to_name):''}${w.action_label?' ('+w.action_label+')':''}`, by:w.moved_by_name, note:w.note});});
   (d.versions||[]).forEach(v=>hist.push({t:v.uploaded_at, ic:'📄', txt:`Version <strong>v${v.version}</strong> uploadée`, by:v.uploaded_by_name, note:v.note}));
   (d.signatures||[]).forEach(sg=>hist.push({t:sg.signed_at, ic:'✒️', txt:`Signé : <strong>${esc(sg.meaning)}</strong>`, by:sg.user_name, note:sg.reason}));
   hist.sort((a,b)=>(a.t||'')<(b.t||'')?1:-1);
@@ -2307,7 +2334,7 @@ function renderDocViewerSide(d, cur){
 
   $('dvSide').innerHTML=`
     <div class="dv-side-head">
-      <div class="meta" style="font-size:12px">${d.assigned_to_name?'Chez <strong>'+esc(d.assigned_to_name)+'</strong>':'Non assigné'}</div>
+      <div class="meta" style="font-size:12px">${d.assigned_to_name?'Chez <strong>'+esc(d.assigned_to_name)+'</strong>'+(d.assigned_action_label?' ('+d.assigned_action_label+')':''):'Non assigné'}</div>
     </div>
     <div class="dv-actions">${actions}</div>
     ${lockMsg}
@@ -2377,10 +2404,16 @@ async function docTransition(){
   if(!currentDocId)return;
   const phase=$('f_docPhase').value;
   const assigneeVal=$('f_docAssignee').value;
+  const actionVal=$('f_docAction')?$('f_docAction').value:'';
   const note=$('f_docTransNote').value.trim();
   const notify=$('f_docNotify').checked;
   const ph=DOC_PHASE_BY_KEY[phase];
-  const body={phase, assigned_to: assigneeVal?parseInt(assigneeVal,10):null, note, notify};
+  // Action attendue obligatoire dès qu'on assigne le document à quelqu'un
+  if(assigneeVal && !actionVal){
+    toast('Précise l\'action attendue : Lecture ou Rédaction.','err');
+    if($('f_docAction'))$('f_docAction').focus();return;
+  }
+  const body={phase, assigned_to: assigneeVal?parseInt(assigneeVal,10):null, action_type: actionVal, note, notify};
   // Signature électronique requise pour Approbation / Prêt QMS
   if(DOC_SIGN_PHASES.includes(phase)){
     const reason=$('f_docSignReason').value.trim();
@@ -2391,13 +2424,14 @@ async function docTransition(){
   }
   try{
     const r=await api('/api/documents/'+currentDocId+'/transition',{method:'POST',body});
-    toast((DOC_SIGN_PHASES.includes(phase)?'✒️ Signé et déplacé en « ':'Document déplacé en « ')+(ph?ph.label:phase)+' »');
+    const actLbl=DOC_ACTION_LABELS[actionVal]||'';
+    toast((DOC_SIGN_PHASES.includes(phase)?'✒️ Signé et déplacé en « ':'Document déplacé en « ')+(ph?ph.label:phase)+' »'+(actLbl&&assigneeVal?' · '+actLbl:''));
     // Notification email via Outlook (mailto) — ouvre depuis ton compte
     if(notify && assigneeVal && r.assignee_email){
       const docName=currentDocObj?currentDocObj.name:'document';
       const appUrl=window.location.origin;
-      const subject=`[Document qualité] ${docName} — ${ph?ph.label:phase} : action requise`;
-      const body=`Bonjour ${(r.assignee_name||'').split(' ')[0]},\n\nLe document « ${docName} » vient de passer en phase « ${ph?ph.label:phase} » et t'a été assigné pour action / revue.\n${note?'\nNote : '+note+'\n':''}\nAccède à l'application pour le consulter :\n${appUrl}\n\nMerci,\n${ME.name}`;
+      const subject=`[Document qualité] ${docName} — ${ph?ph.label:phase}${actLbl?' ('+actLbl+')':''} : action requise`;
+      const body=`Bonjour ${(r.assignee_name||'').split(' ')[0]},\n\nLe document « ${docName} » vient de passer en phase « ${ph?ph.label:phase} » et t'a été assigné${actLbl?' pour '+actLbl.toLowerCase():' pour action / revue'}.\n${note?'\nNote : '+note+'\n':''}\nAccède à l'application pour le consulter :\n${appUrl}\n\nMerci,\n${ME.name}`;
       window.location.href='mailto:'+encodeURIComponent(r.assignee_email)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
     }else if(notify && assigneeVal && !r.assignee_email){
       toast("Pas d'email pour cette personne — notification in-app seulement.",'warn');

@@ -415,10 +415,15 @@ def on_startup():
         if not any_admin:
             admin_email = os.environ.get("ADMIN_EMAIL", "admin@atelier.local")
             admin_password = os.environ.get("ADMIN_PASSWORD", "admin")
+            # Si le mot de passe est faible/par défaut, on impose son changement à
+            # la première connexion (pas d'admin/admin persistant en production).
+            weak = len(admin_password) < 8 or admin_password.lower() in ("admin", "password", "123456")
             u = User(email=admin_email, name="Administrateur",
-                     password_hash=bcrypt.hash(admin_password), role="admin")
+                     password_hash=bcrypt.hash(admin_password), role="admin",
+                     must_change_password=weak)
             s.add(u); s.commit()
-            print(f"[Atelier] Admin créé : {admin_email} / {admin_password}")
+            print(f"[Atelier] Admin créé : {admin_email}"
+                  + (" (mot de passe à changer à la 1re connexion)" if weak else ""))
         if not _setting(s, "app_name"):
             _set_setting(s, "app_name", "Helix")
         # Rebranding unique vers "Helix" (ne s'applique qu'une seule fois)

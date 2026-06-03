@@ -1752,6 +1752,13 @@ async def upload_version(
     u: User = Depends(require_user), s: Session = Depends(get_session)):
     d = s.get(Document, doc_id)
     if not d: raise HTTPException(404, "Document introuvable")
+    # Contrôle d'accès : le document est sous la responsabilité de la personne
+    # assignée (ou, à défaut, de son créateur). Seule elle — ou un admin — peut
+    # déposer une nouvelle version. (Aligné sur la règle des transitions.)
+    holder = d.assigned_to or d.created_by
+    if u.role != "admin" and holder and holder != u.id:
+        raise HTTPException(403, f"Ce document est sous la responsabilité de {_user_name(s, holder)} : "
+                                 "tu ne peux pas déposer de version.")
     # Si verrouillé par quelqu'un d'autre, refuser (sauf admin)
     if d.locked_by and d.locked_by != u.id and u.role != "admin":
         raise HTTPException(403, f"Document verrouillé par {_user_name(s, d.locked_by)}")

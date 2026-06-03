@@ -2061,8 +2061,8 @@ async function openDocDetail(docId){
     // Seule la dernière version est téléchargeable (les antérieures : admins, audit)
     const canDl = v.is_latest || IS_ADMIN;
     const dlBtn = canDl
-      ? `<a class="btn sm ghost" href="/api/documents/${d.id}/versions/${v.id}/download">⬇ Télécharger${(!v.is_latest&&IS_ADMIN)?' (archive)':''}</a>`
-      : `<span class="pill" title="Seule la dernière version est téléchargeable" style="opacity:.7">🔒 archivée</span>`;
+      ? `<a class="btn sm ghost" href="/api/documents/${d.id}/versions/${v.id}/download" title="Version archivée dans l'historique de l'application (audit) — accès admin">⬇ Télécharger${(!v.is_latest&&IS_ADMIN)?' (archive)':''}</a>`
+      : `<span class="pill" title="Conservée dans l'historique de l'application (audit), pas dans un dossier Windows. Téléchargeable uniquement par un administrateur." style="opacity:.7">🔒 archivée (audit)</span>`;
     return `
     <div class="row" style="justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line)">
       <div style="flex:1;min-width:0">

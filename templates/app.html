@@ -48,9 +48,11 @@
         {% if is_admin %}<span class="role-tag">ADMIN</span>{% else %}<span class="uc-role">Utilisateur</span>{% endif %}
       </div>
     </div>
-    <a id="tourBtn" class="side-logout" title="Revoir la visite guidée" style="margin-bottom:6px;cursor:pointer">🎓 Visite guidée</a>
-    <a id="manualLink" href="/api/manual.pptx" class="side-logout" title="Télécharger le manuel utilisateur (PowerPoint)" style="margin-bottom:6px">📘 Manuel (PPT)</a>
-    <a href="/logout" class="side-logout" title="Déconnexion">⏻ Déconnexion</a>
+    <div class="side-mini-row">
+      <a id="tourBtn" class="side-mini" title="Revoir la visite guidée" style="cursor:pointer">🎓 Visite</a>
+      <a id="manualLink" href="/api/manual.pptx" class="side-mini" title="Télécharger le manuel utilisateur (PowerPoint)">📘 Manuel</a>
+      <a href="/logout" class="side-mini danger" title="Déconnexion">⏻ Quitter</a>
+    </div>
   </div>
 </aside>
 <div class="sidebar-scrim" id="sidebarScrim"></div>

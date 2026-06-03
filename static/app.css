@@ -119,7 +119,17 @@ kbd{font-family:'Space Grotesk',monospace;font-size:10px;background:var(--panel2
 .side-brand-txt h1.editable:hover{color:var(--acc)}
 .side-brand-txt span{color:var(--mut);font-size:9px;letter-spacing:2px;text-transform:uppercase;font-weight:600}
 
-.side-foot{padding:12px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.side-foot{padding:10px 12px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+/* Actions compactes (visite / manuel / déconnexion) condensées en bas */
+.side-mini-row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.side-mini{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:4px 9px;border-radius:8px;font-size:11px;font-weight:600;
+  color:var(--mut);text-decoration:none;border:1px solid var(--line);
+  background:var(--panel);cursor:pointer;transition:all var(--t-fast);white-space:nowrap;
+}
+.side-mini:hover{color:var(--acc);border-color:var(--acc);background:var(--panel2)}
+.side-mini.danger:hover{color:var(--bad);border-color:var(--bad);background:rgba(220,38,38,.05)}
 .user-chip{display:flex;align-items:center;gap:10px;background:var(--panel2);border:1px solid var(--line);padding:8px 11px;border-radius:12px}
 .user-chip .ava{
   width:32px;height:32px;border-radius:9px;display:grid;place-items:center;

@@ -3277,6 +3277,9 @@ const TOUR_STEPS=[
   {sel:'#btnImportGantt', tab:'dash', pos:'bottom', title:'📥 Importer un planning', text:"Tu as déjà un planning (Gantt PDF) d'un fournisseur ? Importe-le : l'IA crée les tâches automatiquement."},
   {sel:'.side-nav .tab[data-tab="tasks"]', tab:'tasks', pos:'right', title:'✓ Tâches', text:"Voici les tâches du projet exemple. Crée, suis et assigne-les. Les chefs de projet peuvent les assigner à d'autres (avec notification + email)."},
   {sel:'#burndownChart', tab:'synth', pos:'top', title:'📉 Avancement planifié vs réel', text:"Dans la <strong>Synthèse</strong>, la courbe d'avancement compare le rythme <strong>planifié</strong> (chaque tâche finie à son échéance) au <strong>réel</strong> : un coup d'œil suffit pour voir si le projet est en avance ou en retard. Juste en dessous, le diagramme de Gantt."},
+  {sel:'.side-nav .tab[data-tab="team"]', tab:'team', pos:'right', title:'👥 Équipe', text:"La liste des membres : rôle, disponibilité, et — important — <strong>ton trigramme</strong>. On le règle juste après 👇"},
+  {sel:`[data-set-trigram="${ME.id}"]`, tab:'team', pos:'right', title:'🔖 Renseigne ton trigramme', text:"Ton <strong>trigramme</strong> = tes initiales (ex : <strong>ABS</strong>). C'est ta <strong>signature</strong> documentaire : il est <strong>obligatoire pour valider / pousser un document</strong>, et il s'inscrit automatiquement dans le nom du fichier (ex : <em>Planning_ABS_V2</em>).<br><br>👉 Clique « <strong>Définir trigramme</strong> » sur ta carte et saisis 2 à 4 lettres. À faire une seule fois.",
+   action:`<button class="btn primary sm" id="tourSetTrigram" style="margin-bottom:8px">🔖 Définir mon trigramme maintenant</button>`},
   {sel:'.side-nav .tab[data-tab="docs"]', tab:'docs', pos:'right', title:'📄 Documents qualité', text:"On a aussi ajouté un <strong>document exemple</strong> rangé par répertoire (« Validation »). Regardons-le de près 👇"},
   {sel:'#qmsBand', tab:'docs', pos:'bottom', title:'🩺 Le baromètre documentaire', text:"En tête de page, ce bandeau résume la santé documentaire : documents <strong>hors délai SLA</strong>, tes <strong>« lu &amp; compris »</strong> à faire, diffusions en cours et documents obsolètes."},
   // ----- Deep-dive Documents (sur le document exemple) -----
@@ -3286,7 +3289,7 @@ const TOUR_STEPS=[
   {sel:'#dvCommentInput', pos:'top', title:'💬 Commenter', text:"Écris un commentaire visible par toute l'équipe. Tape « @ » pour mentionner quelqu'un — il reçoit une notification."},
   {sel:'#dvPlaceBtn', pos:'top', title:'📍 Commentaire ancré', text:"Tu peux placer un commentaire à un endroit PRÉCIS du document : écris, clique 📍, puis clique dans la page. Une épingle apparaît et le commentaire y est rattaché."},
   {sel:'#dvWorkflow', pos:'top', title:'⚙ Faire avancer (pousser)', text:"Pour « pousser » le document à la phase suivante, ouvre « Workflow »."},
-  {run:()=>{ closeModal('docViewerModal'); const id=_tourDocId(); if(id) openDocDetail(id); }, sel:'#f_docPhase', pos:'bottom', title:'➡️ Pousser de phase', text:"Le circuit de l'atelier compte 3 phases : <strong>Rédaction → Revue équipe → Revue QA</strong>. Choisis la phase suivante, assigne une personne et précise l'<strong>action attendue</strong> : <strong>📖 Lecture</strong> (relire/vérifier) ou <strong>✍️ Rédaction</strong> (produire/modifier). La personne est notifiée (in-app + email).<br><br>⚠️ Si le document est <strong>chez un collègue</strong>, seul lui (ou un administrateur) peut le faire avancer."},
+  {run:()=>{ closeModal('docViewerModal'); const id=_tourDocId(); if(id) openDocDetail(id); }, sel:'#f_docPhase', pos:'bottom', title:'➡️ Pousser de phase', text:"Le circuit de l'atelier compte 3 phases : <strong>Rédaction → Revue équipe → Revue QA</strong>. Choisis la phase suivante, assigne une personne et précise l'<strong>action attendue</strong> : <strong>📖 Lecture</strong> ou <strong>✍️ Rédaction</strong>. En validant, tu <strong>signes avec ton trigramme</strong> (qui s'inscrit dans le nom du fichier) — d'où l'importance de l'avoir renseigné.<br><br>⚠️ Si le document est <strong>chez un collègue</strong>, seul lui (ou un administrateur) peut le faire avancer."},
   {center:true, title:'🔬 La Revue QA part dans D.O.T / QMS', text:"La <strong>Revue QA</strong> est la dernière étape côté atelier : à partir de là, le document passe dans <strong>D.O.T / QMS</strong> (Salesforce), où se font la revue, l'approbation et la signature officielle. Quand tu pousses en Revue QA, <strong>pas d'assignation interne</strong> : le portail <strong>D.O.T s'ouvre automatiquement</strong> pour y déposer le document (un bouton « Ouvrir D.O.T / QMS » reste aussi disponible)."},
   // ----- Suite -----
   {run:()=>{ closeModal('docDetailModal'); closeModal('docViewerModal'); }, sel:'#btnNotif', pos:'bottom', title:'🔔 Notifications', text:"Tu es prévenu ici dès qu'un document ou une tâche t'est assigné, ou qu'on te mentionne."},
@@ -3397,6 +3400,11 @@ async function showTourStep(){
   $('tourNext').onclick=()=>{_tourDir=1;_tourI++;showTourStep();};
   if($('tourPrev'))$('tourPrev').onclick=()=>{_tourDir=-1;_tourI--;showTourStep();};
   $('tourSkip').onclick=endTour;
+  // Bouton "Définir mon trigramme" : ouvre la saisie puis rafraîchit l'étape
+  if($('tourSetTrigram')) $('tourSetTrigram').onclick=async()=>{
+    await setTrigram(ME.id);
+    showTourStep();   // re-rend l'étape (le bouton de la carte reflète le nouveau trigramme)
+  };
   // Bouton final : créer son premier vrai projet, puis CONTINUER (félicitations → tâche)
   if($('tourCreateProj')) $('tourCreateProj').onclick=async()=>{
     await tourCleanupDemo();              // retire les exemples

@@ -2144,6 +2144,8 @@ async function openDocDetail(docId){
           <span class="pill">${DOC_TYPES[d.doc_type]||d.doc_type}</span>
           ${d.folder?`<span class="doc-folder-tag">📁 ${esc(d.folder)}</span>`:''}
           <button class="btn sm ghost" id="btnDocFolder" style="padding:2px 8px;font-size:11px">📁 ${d.folder?'Changer':'Ranger'}</button>
+          ${d.confidential?'<span class="pill" style="background:rgba(220,38,38,.12);color:var(--bad);font-weight:700">🔒 Confidentiel</span>':''}
+          ${(IS_ADMIN||d.created_by===ME.id)?`<button class="btn sm ghost" id="btnDocConfidential" style="padding:2px 8px;font-size:11px">${d.confidential?'Rendre non confidentiel':'Marquer confidentiel'}</button>`:''}
           ${d.obsolete?'<span class="doc-obsolete-badge">⚠ OBSOLÈTE</span>':''}
         </div>
         <h2 style="margin:7px 0 0">📄 ${esc(d.name)}</h2>
@@ -2196,6 +2198,14 @@ async function openDocDetail(docId){
     const v=prompt('Répertoire / catégorie du document :',d.folder||'');
     if(v===null)return;
     try{await api('/api/documents/'+d.id,{method:'PUT',body:{folder:v.trim()}});toast('Répertoire mis à jour');openDocDetail(d.id);renderDocs();}
+    catch(e){toast(e.message,'err');}
+  });
+  const confBtn=$('btnDocConfidential');
+  if(confBtn) confBtn.addEventListener('click',async()=>{
+    const next=!d.confidential;
+    if(next && !confirm('Rendre ce document confidentiel ? Il ne sera plus visible que par toi, la personne assignée, les lecteurs diffusés et les admins.'))return;
+    try{await api('/api/documents/'+d.id,{method:'PUT',body:{confidential:next}});
+      toast(next?'🔒 Document marqué confidentiel':'Document rendu non confidentiel');openDocDetail(d.id);renderDocs();}
     catch(e){toast(e.message,'err');}
   });
   // Gestion de la liste de diffusion
@@ -2291,7 +2301,12 @@ async function openDocViewer(docId){
 }
 async function renderDocPreview(d, cur){
   const pv=$('dvPreview');
-  pv.innerHTML='<div class="dv-watermark"></div><div class="dv-content" id="dvContent"><div class="dv-doc" id="dvDoc"></div><div class="dv-anno" id="dvAnno"></div></div>';
+  // Filigrane NOMINATIF : nom du lecteur + date (dissuasion fuite / traçabilité)
+  const who=(ME.name||'').replace(/[<>&]/g,'');
+  const wmText=`COPIE NON CONTROLEE · ${who} · ${new Date().toLocaleDateString('fr-FR')}`;
+  const wmSvg=`<svg xmlns='http://www.w3.org/2000/svg' width='480' height='220'><text x='6' y='130' transform='rotate(-30 240 110)' fill='rgba(220,38,38,0.13)' font-size='17' font-family='Arial' font-weight='700'>${wmText}</text></svg>`;
+  const wmStyle=`--wm-img:url("data:image/svg+xml,${encodeURIComponent(wmSvg)}")`;
+  pv.innerHTML=`<div class="dv-watermark" style="${wmStyle}"></div><div class="dv-content" id="dvContent"><div class="dv-doc" id="dvDoc"></div><div class="dv-anno" id="dvAnno"></div></div>`;
   const c=$('dvDoc');
   if(!cur){c.innerHTML='<div class="empty">Aucun fichier</div>';return;}
   const name=(cur.filename||'').toLowerCase();
@@ -2555,6 +2570,7 @@ async function saveDoc(){
   fd.append('note',$('f_docNote').value.trim());
   fd.append('doc_type',$('f_docType').value);
   fd.append('folder',_selectedFolder());
+  fd.append('confidential', ($('f_docConfidential')&&$('f_docConfidential').checked)?'1':'');
   const pid=$('f_docProject').value;
   if(pid) fd.append('project_id',pid);
   fd.append('file',file);
@@ -2641,6 +2657,7 @@ function openDocCreate(){
   $('docCreateModal').classList.add('show');
   $('f_docFile').value='';$('f_docName').value='';
   if($('f_docDesc'))$('f_docDesc').value='';if($('f_docNote'))$('f_docNote').value='';
+  if($('f_docConfidential'))$('f_docConfidential').checked=false;
   _populateFolderSelect('');
 }
 // Auto-remplit le nom du document depuis le fichier choisi (modifiable ensuite)

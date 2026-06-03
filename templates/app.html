@@ -325,15 +325,15 @@
   <div class="row" style="justify-content:flex-end;margin-top:14px" id="docActions"></div>
 </div></div>
 
-<script>
-window.CURRENT_USER = {
-  id: {{ user.id }}, name: {{ user.name|tojson }}, role: {{ user.role|tojson }},
-  trigram: {{ (user.trigram or '')|tojson }},
-  is_admin: {{ 'true' if is_admin else 'false' }},
-  can_manage_projects: {{ 'true' if can_manage_projects else 'false' }},
-  must_change_password: {{ 'true' if must_change_password else 'false' }}
-};
-</script>
+<script type="application/json" id="bootstrap-data">{
+  "id": {{ user.id }},
+  "name": {{ user.name|tojson }},
+  "role": {{ user.role|tojson }},
+  "trigram": {{ (user.trigram or '')|tojson }},
+  "is_admin": {{ 'true' if is_admin else 'false' }},
+  "can_manage_projects": {{ 'true' if can_manage_projects else 'false' }},
+  "must_change_password": {{ 'true' if must_change_password else 'false' }}
+}</script>
 <div class="modal-bg" id="searchModal"><div class="modal" style="width:min(640px,100%)">
   <div class="search-bar"><span>🔍</span><input id="searchInput" type="text" placeholder="Rechercher un projet, une tâche, un document, une personne…" autocomplete="off"></div>
   <div id="searchResults"></div>
@@ -459,7 +459,6 @@ window.CURRENT_USER = {
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.5/dist/docx-preview.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script>if(window.pdfjsLib)pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <script src="/static/app.js?v={{ asset_v }}"></script>
 </body>
 </html>

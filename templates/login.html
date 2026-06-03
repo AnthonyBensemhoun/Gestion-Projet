@@ -13,7 +13,9 @@
   </div>
   <h1>{{ app_name }}</h1>
   <p class="sub">Gestion de projet collaborative</p>
-  {% if request.query_params.get("error") %}
+  {% if request.query_params.get("error") == "locked" %}
+  <div class="login-error">Trop de tentatives de connexion. Réessaie dans quelques minutes.</div>
+  {% elif request.query_params.get("error") %}
   <div class="login-error">Identifiants incorrects.</div>
   {% endif %}
   <form method="post" action="/login">

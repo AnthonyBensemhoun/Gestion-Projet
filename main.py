@@ -38,7 +38,8 @@ else:
 # ---------------- Config ----------------
 _default_db = "sqlite:///" + os.path.join(DATA_DIR, "atelier.db").replace("\\", "/")
 DB_URL = os.environ.get("DATABASE_URL", _default_db)
-SECRET_ADMIN_TOKEN = os.environ.get("ADMIN_BOOTSTRAP_TOKEN", "atelier-setup")
+# Sécurité : cookies Secure par défaut (mettre COOKIE_SECURE=0 pour un test en HTTP local).
+SECURE_COOKIES = os.environ.get("COOKIE_SECURE", "1") != "0"
 if DB_URL.startswith("postgresql://") or DB_URL.startswith("postgres://"):
     import ssl as _ssl
     DB_URL = DB_URL.replace("postgresql://", "postgresql+pg8000://", 1).replace("postgres://", "postgresql+pg8000://", 1)
@@ -312,7 +313,31 @@ def require_project_manager(request: Request, s: Session = Depends(get_session))
     return u
 
 # ---------------- App ----------------
-app = FastAPI(title="Atelier")
+app = FastAPI(title="Atelier", docs_url=None, redoc_url=None, openapi_url=None)
+
+# Politique de sécurité du contenu (CSP) : autorise uniquement nos origines + CDNs connus.
+# Pas de 'unsafe-inline' pour les scripts (aucun script inline : voir bootstrap-data).
+_CSP = ("default-src 'self'; "
+        "script-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: https:; "
+        "worker-src 'self' blob: https://cdnjs.cloudflare.com; "
+        "connect-src 'self'; "
+        "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "same-origin"
+    resp.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=(), payment=()"
+    resp.headers["Content-Security-Policy"] = _CSP
+    resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    resp.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    return resp
+
 templates = Jinja2Templates(directory=os.path.join(RESOURCE_DIR, "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(RESOURCE_DIR, "static")), name="static")
 
@@ -425,12 +450,40 @@ def login_page(request: Request, s: Session = Depends(get_session)):
         "app_logo": _setting(s, "app_logo", "")
     })
 
+# Anti brute-force : verrou par IP après plusieurs échecs (fenêtre glissante en mémoire).
+_LOGIN_FAILS = {}            # ip -> [nb_échecs, début_fenêtre]
+_LOGIN_MAX = 8               # échecs autorisés
+_LOGIN_WINDOW = 900          # sur 15 minutes
+
+def _login_locked(ip: str) -> bool:
+    c = _LOGIN_FAILS.get(ip)
+    if not c:
+        return False
+    if (datetime.utcnow() - c[1]).total_seconds() >= _LOGIN_WINDOW:
+        _LOGIN_FAILS.pop(ip, None)
+        return False
+    return c[0] >= _LOGIN_MAX
+
+def _login_record_fail(ip: str):
+    now = datetime.utcnow()
+    c = _LOGIN_FAILS.get(ip)
+    if not c or (now - c[1]).total_seconds() >= _LOGIN_WINDOW:
+        _LOGIN_FAILS[ip] = [1, now]
+    else:
+        c[0] += 1
+
 @app.post("/login")
-def login(response: Response, email: str = Form(...), password: str = Form(...),
+def login(request: Request, email: str = Form(...), password: str = Form(...),
           s: Session = Depends(get_session)):
+    fwd = request.headers.get("x-forwarded-for")
+    ip = (fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "?"))
+    if _login_locked(ip):
+        return RedirectResponse("/login?error=locked", status_code=303)
     user = s.exec(select(User).where(User.email == email.lower().strip())).first()
     if not user or not bcrypt.verify(password, user.password_hash):
+        _login_record_fail(ip)
         return RedirectResponse("/login?error=1", status_code=303)
+    _LOGIN_FAILS.pop(ip, None)                 # succès : on réinitialise
     now = datetime.utcnow()
     token = secrets.token_urlsafe(32)
     s.add(Session_(token=token, user_id=user.id, expires=now + timedelta(days=30)))
@@ -438,7 +491,8 @@ def login(response: Response, email: str = Form(...), password: str = Form(...),
     _audit(s, user.name, "Connexion", f"Email : {user.email}")
     s.commit()
     resp = RedirectResponse("/", status_code=303)
-    resp.set_cookie("atelier_session", token, httponly=True, samesite="lax", max_age=30*86400)
+    resp.set_cookie("atelier_session", token, httponly=True, samesite="lax",
+                    secure=SECURE_COOKIES, max_age=30*86400, path="/")
     return resp
 
 @app.get("/logout")
@@ -449,7 +503,7 @@ def logout(request: Request, s: Session = Depends(get_session)):
         if sess:
             s.delete(sess); s.commit()
     resp = RedirectResponse("/login", status_code=303)
-    resp.delete_cookie("atelier_session")
+    resp.delete_cookie("atelier_session", path="/", samesite="lax", secure=SECURE_COOKIES)
     return resp
 
 # ---------------- API : Users / Team ----------------
@@ -539,13 +593,19 @@ def delete_user(uid: int, u: User = Depends(require_admin), s: Session = Depends
     return {"ok": True}
 
 @app.put("/api/me/password")
-def change_my_password(data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
+def change_my_password(data: dict, request: Request, u: User = Depends(require_user),
+                       s: Session = Depends(get_session)):
     new_pw = data.get("password", "").strip()
-    if len(new_pw) < 6:
-        raise HTTPException(400, "Le mot de passe doit faire au moins 6 caractères")
+    if len(new_pw) < 8:
+        raise HTTPException(400, "Le mot de passe doit faire au moins 8 caractères")
     target = s.get(User, u.id)
     target.password_hash = bcrypt.hash(new_pw)
     target.must_change_password = False
+    # Sécurité : révoque les AUTRES sessions du compte (on garde la session courante).
+    cur_tok = request.cookies.get("atelier_session")
+    for sess in s.exec(select(Session_).where(Session_.user_id == u.id)).all():
+        if sess.token != cur_tok:
+            s.delete(sess)
     s.add(target); s.commit()
     return {"ok": True}
 
@@ -1710,6 +1770,26 @@ async def upload_version(
     s.commit()
     return _doc_dict(s, s.get(Document, doc_id))
 
+# Types MIME SÛRS dérivés de l'extension (jamais du content-type fourni par l'uploadeur,
+# qui pourrait être text/html et provoquer un XSS si servi inline).
+_SAFE_MIME = {
+    ".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+    ".txt": "text/plain; charset=utf-8", ".md": "text/plain; charset=utf-8",
+    ".csv": "text/plain; charset=utf-8",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+# Seuls ces types peuvent être servis "inline" (rendus dans le navigateur).
+_INLINE_OK = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".txt", ".md", ".csv"}
+
+def _ext_of(name: str) -> str:
+    return ("." + name.rsplit(".", 1)[-1].lower()) if name and "." in name else ""
+
+def _safe_media_type(filename: str) -> str:
+    return _SAFE_MIME.get(_ext_of(filename), "application/octet-stream")
+
 def _versioned_filename(doc: Document, v: DocumentVersion) -> str:
     """Nom de fichier normalisé : Nom_TRIGRAMME_Vn.ext (trigramme du valideur)."""
     base = re.sub(r'[\\/:*?"<>|]+', "", (doc.name if doc else "") or "document").strip() or "document"
@@ -1738,7 +1818,7 @@ def download_version(doc_id: int, ver_id: int,
     fname = _versioned_filename(doc, v)
     headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{_urlquote(fname)}"}
     return StreamingResponse(io.BytesIO(v.content),
-                             media_type=v.mime_type or "application/octet-stream",
+                             media_type=_safe_media_type(v.filename),
                              headers=headers)
 
 @app.get("/api/documents/{doc_id}/versions/{ver_id}/view")
@@ -1748,9 +1828,12 @@ def view_version(doc_id: int, ver_id: int,
     v = s.get(DocumentVersion, ver_id)
     if not v or v.document_id != doc_id:
         raise HTTPException(404, "Version introuvable")
-    headers = {"Content-Disposition": f"inline; filename*=UTF-8''{_urlquote(v.filename)}"}
+    ext = _ext_of(v.filename)
+    # Inline uniquement pour les types sûrs ; sinon on force le téléchargement.
+    disp = "inline" if ext in _INLINE_OK else "attachment"
+    headers = {"Content-Disposition": f"{disp}; filename*=UTF-8''{_urlquote(v.filename)}"}
     return StreamingResponse(io.BytesIO(v.content),
-                             media_type=v.mime_type or "application/octet-stream",
+                             media_type=_safe_media_type(v.filename),
                              headers=headers)
 
 # ---------------- API : Commentaires de documents ----------------

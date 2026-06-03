@@ -1,4 +1,13 @@
 "use strict";
+/* ====== Données d'amorçage (injectées sans script inline → CSP stricte) ====== */
+window.CURRENT_USER = (function(){
+  try { return JSON.parse(document.getElementById('bootstrap-data').textContent); }
+  catch(e){ return window.CURRENT_USER || {}; }
+})();
+// Worker pdf.js (déplacé ici depuis un script inline pour la CSP)
+if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
 /* ====== État global ====== */
 const ME = window.CURRENT_USER;
 const IS_ADMIN = ME.is_admin;

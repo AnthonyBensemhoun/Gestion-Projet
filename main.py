@@ -1286,15 +1286,16 @@ def ai_estimate_load(data: dict, u: User = Depends(require_admin), s: Session = 
 DOC_MAX_SIZE = 25 * 1024 * 1024  # 25 Mo
 DOC_ALLOWED_EXT = (".docx", ".doc", ".pdf", ".xlsx", ".xls", ".pptx", ".ppt", ".txt", ".md", ".csv")
 DOC_STATUS = ("draft", "review", "approved")
-# Workflow documentaire (style Veeva) — phases ordonnées.
-# "transmis_qms" est la phase TERMINALE : le document est parti chez D.O.T / dans
-# le QMS officiel, il n'est donc plus sous la responsabilité de l'atelier (cycle clos).
-DOC_PHASES = ["redaction", "revue_equipe", "revue_qa", "approbation", "pret_qms", "transmis_qms"]
-DOC_TERMINAL_PHASE = "transmis_qms"
+# Workflow documentaire — le circuit de l'atelier s'arrête à la Revue QA.
+# Tout ce qui suit (approbation, QMS officiel) se déroule dans D.O.T / QMS
+# (Salesforce). "revue_qa" est donc la phase TERMINALE côté atelier : passage de
+# relais vers D.O.T, le document n'est plus sous la responsabilité de l'atelier.
+DOC_PHASES = ["redaction", "revue_equipe", "revue_qa"]
+DOC_TERMINAL_PHASE = "revue_qa"
 DOC_PHASE_STATUS = {  # statut "simple" dérivé de la phase (rétrocompat)
     "redaction": "draft", "revue_equipe": "review", "revue_qa": "review",
-    "approbation": "review", "pret_qms": "approved", "transmis_qms": "approved",
 }
+# Libellés — inclut d'anciennes phases pour rester lisible dans l'historique.
 DOC_PHASE_LABELS = {
     "redaction": "Rédaction", "revue_equipe": "Revue équipe", "revue_qa": "Revue QA",
     "approbation": "Approbation", "pret_qms": "Prêt pour QMS", "transmis_qms": "Transmis au QMS",
@@ -1312,8 +1313,10 @@ DOC_SLA_DAYS = {
     "redaction": 14, "revue_equipe": 5, "revue_qa": 7, "approbation": 5, "pret_qms": 0,
     "transmis_qms": 0,
 }
-# Phases nécessitant une signature électronique (mot de passe + motif)
-DOC_SIGN_PHASES = ("approbation", "pret_qms")
+# Phases nécessitant une signature électronique (mot de passe + motif).
+# Le circuit s'arrêtant à la Revue QA, les signatures officielles se font
+# désormais dans D.O.T / QMS — aucune phase de signature côté atelier.
+DOC_SIGN_PHASES = ()
 
 def _next_doc_reference(s: Session, doc_type: str) -> str:
     prefix = doc_type if doc_type in DOC_TYPES else "DOC"
@@ -1461,10 +1464,10 @@ def transition_document(doc_id: int, data: dict, u: User = Depends(require_user)
         holder = _user_name(s, d.assigned_to)
         raise HTTPException(403, f"Ce document est actuellement chez {holder}. "
                                  "Seul cette personne (ou un administrateur) peut le faire avancer.")
-    # Cycle clôturé : un document transmis au QMS n'est plus sous notre responsabilité.
+    # Circuit atelier terminé : en Revue QA, le document est passé dans D.O.T / QMS.
     if d.phase == DOC_TERMINAL_PHASE and u.role != "admin":
-        raise HTTPException(400, "Ce document est déjà transmis au QMS : le cycle est clôturé. "
-                                 "Seul un administrateur peut le rouvrir.")
+        raise HTTPException(400, "Ce document est en Revue QA : le suivi se poursuit dans D.O.T / QMS "
+                                 "et le circuit de l'atelier est terminé. Seul un administrateur peut le rouvrir.")
     phase = data.get("phase")
     if phase not in DOC_PHASES:
         raise HTTPException(400, "Phase invalide")
@@ -1970,20 +1973,15 @@ MANUAL_FEATURES = [
         "Déclaration des absences (congés, maladie, télétravail…).",
         "Alertes automatiques : tâches en retard, échéances proches.",
         "Cloche de notifications in-app (documents, mentions, assignations)."]),
-    ("Documents — Workflow qualité", "Circuit type Veeva, du brouillon au QMS", [
-        "Phases : Rédaction → Revue équipe → Revue QA → Approbation → Prêt QMS → Transmis au QMS.",
-        "« Transmis au QMS » clôt le cycle : le document est parti chez D.O.T / dans le QMS officiel, il n'est plus sous la responsabilité de l'atelier (seul un admin peut rouvrir).",
-        "Dès la phase Revue QA, un bouton « Ouvrir D.O.T / QMS » donne accès au portail officiel (Salesforce) dans un nouvel onglet ; pousser un document en Revue QA l'ouvre automatiquement.",
-        "À chaque push vers une personne, on précise l'action attendue : Lecture (relire/vérifier) ou Rédaction (produire/modifier).",
+    ("Documents — Workflow qualité", "Circuit atelier jusqu'à la Revue QA", [
+        "Phases atelier : Rédaction → Revue équipe → Revue QA.",
+        "Le circuit s'arrête à la Revue QA : à partir de là, le document part dans D.O.T / QMS (Salesforce) et n'est plus sous la responsabilité de l'atelier (seul un admin peut le rouvrir).",
+        "Pousser un document en Revue QA n'assigne personne en interne et ouvre automatiquement le portail D.O.T / QMS pour l'y déposer ; un bouton « Ouvrir D.O.T / QMS » reste disponible.",
+        "À chaque push vers une personne (Rédaction / Revue équipe), on précise l'action attendue : Lecture (relire/vérifier) ou Rédaction (produire/modifier).",
         "Timeline animée : où en est le document et chez qui.",
         "Verrouillage / nouvelle version (check-out / check-in), historique complet.",
         "Au verrouillage, l'app enregistre une copie locale de la dernière version dans le dossier de travail que tu choisis (double de sécurité réseau ; sélecteur de dossier sur Edge/Chrome, sinon téléchargement).",
-        "Un document « chez » un collègue ne peut être poussé que par lui — ou un admin.",
-        "Bandeau QMS en tête de page : hors délai SLA, signatures attendues, « lu & compris » dus, diffusions, obsolètes."]),
-    ("Signature électronique", "Esprit 21 CFR Part 11", [
-        "Signature obligatoire (mot de passe + motif) en Approbation et Prêt QMS.",
-        "Trace immuable : signataire, signification, motif, version, date/heure.",
-        "Affichée dans le document et dans le journal d'audit."]),
+        "Un document « chez » un collègue ne peut être poussé que par lui — ou un admin."]),
     ("Lecteur de document", "Aperçu et commentaires ancrés", [
         "Aperçu PDF et Word directement dans le navigateur.",
         "Commentaires de toute l'équipe + @mentions.",

@@ -1613,8 +1613,8 @@ async function renderKPI(){
   // Documents par phase
   const phaseCounts={};DOC_PHASES.forEach(p=>phaseCounts[p.key]=0);
   allDocs.forEach(d=>{const ph=d.phase||'redaction';phaseCounts[ph]=(phaseCounts[ph]||0)+1;});
-  const readyQMS=phaseCounts['pret_qms']||0;
-  const awaitingReview=(phaseCounts['revue_qa']||0)+(phaseCounts['approbation']||0);
+  const sentToQA=phaseCounts['revue_qa']||0;                                   // partis en QA / D.O.T
+  const inWorkshop=(phaseCounts['redaction']||0)+(phaseCounts['revue_equipe']||0); // en cours atelier
   const slaBreaches=allDocs.filter(d=>d.sla_over).length;
 
   // Projets à risque (au moins une tâche en retard)
@@ -1631,8 +1631,8 @@ async function renderKPI(){
     ${kpiCard('📅','Échéances à 7 jours',dueWeek,'',dueWeek>0?'warn':'ok')}
     ${kpiCard('💪','Charge équipe moy.',avgLoad,'%',loadVar)}
     ${kpiCard('🟢','Membres dispo. auj.','','','ok',`${availMembers}<span style="font-size:18px;color:var(--mut)">/${state.users.length}</span>`)}
-    ${kpiCard('🚀','Docs prêts QMS',readyQMS,'','teal')}
-    ${kpiCard('🔬','Docs en revue QA',awaitingReview,'',awaitingReview>0?'warn':'ok')}
+    ${kpiCard('✍️','Docs en cours (atelier)',inWorkshop,'','info')}
+    ${kpiCard('🔬','Docs partis en QA / D.O.T',sentToQA,'','teal')}
     ${kpiCard('⏱','Docs hors délai SLA',slaBreaches,'',slaBreaches>0?'bad':'ok')}
     ${kpiCard('⚠️','Projets à risque',projRisk,'',projRisk>0?'bad':'ok')}
   </div>`;
@@ -1705,17 +1705,23 @@ async function renderKPI(){
 /* ====== Documents qualité ====== */
 const DOC_STATUS_LABEL={draft:'Brouillon',review:'En revue',approved:'Approuvé'};
 const DOC_STATUS_COLOR={draft:'#8a8478',review:'var(--warn)',approved:'var(--ok)'};
-// Workflow documentaire (style Veeva) — phases ordonnées
+// Workflow documentaire — le circuit de l'atelier s'arrête à la Revue QA.
+// Au-delà (approbation, QMS officiel), tout se passe dans D.O.T / QMS (Salesforce).
 const DOC_PHASES=[
   {key:'redaction',    label:'Rédaction',     ic:'✍️', color:'#8a8478'},
   {key:'revue_equipe', label:'Revue équipe',  ic:'👥', color:'#2f7fd6'},
   {key:'revue_qa',     label:'Revue QA',      ic:'🔬', color:'#9b59b6'},
-  {key:'approbation',  label:'Approbation',   ic:'✅', color:'#f3a712'},
-  {key:'pret_qms',     label:'Prêt pour QMS', ic:'🚀', color:'#2e9e5b'},
-  {key:'transmis_qms', label:'Transmis au QMS', ic:'🏢', color:'#475569'},
 ];
-const DOC_PHASE_BY_KEY=Object.fromEntries(DOC_PHASES.map(p=>[p.key,p]));
-const DOC_TERMINAL_PHASE='transmis_qms';   // cycle clôturé : hors atelier (chez D.O.T / QMS)
+// Inclut d'anciennes phases (héritées) pour rester lisible dans l'historique.
+const DOC_PHASE_BY_KEY=Object.assign(
+  Object.fromEntries(DOC_PHASES.map(p=>[p.key,p])),
+  {
+    approbation:{key:'approbation', label:'Approbation',   ic:'✅', color:'#f3a712'},
+    pret_qms:   {key:'pret_qms',    label:'Prêt pour QMS', ic:'🚀', color:'#2e9e5b'},
+    transmis_qms:{key:'transmis_qms',label:'Transmis au QMS',ic:'🏢',color:'#475569'},
+  }
+);
+const DOC_TERMINAL_PHASE='revue_qa';   // phase finale atelier : passage de relais vers D.O.T / QMS
 const DOT_QMS_URL='https://alivedx.lightning.force.com/lightning/page/home';   // portail D.O.T / QMS officiel
 const DOC_ACTION_LABELS={lecture:'Lecture', redaction:'Rédaction'};
 const DOC_ACTION_ICONS={lecture:'📖', redaction:'✍️'};
@@ -1726,7 +1732,7 @@ function docActionChip(action){
   return `<span class="pill" title="Action attendue" style="font-size:10px;background:${col}22;color:${col}">${DOC_ACTION_ICONS[action]||''} ${lbl}</span>`;
 }
 const DOC_TYPES={SOP:'SOP',PROTO:'Protocole',REPORT:'Rapport',FORM:'Formulaire',IT:'Instruction',DOC:'Document'};
-const DOC_SIGN_PHASES=['approbation','pret_qms'];
+const DOC_SIGN_PHASES=[];   // plus de signature côté atelier : elle se fait dans D.O.T / QMS
 function docPhaseIndex(k){return DOC_PHASES.findIndex(p=>p.key===k);}
 let currentDocId=null, currentDocObj=null, docProjectFilter='', docViewMode='folders';
 let _docComments=[], _placingComment=false;
@@ -1933,9 +1939,10 @@ async function openDocDetail(docId){
   const assigneeOpts='<option value="">— Personne (optionnel) —</option>'+state.users.map(usr=>`<option value="${usr.id}">${esc(usr.name)}</option>`).join('');
   const isClosed = (d.phase===DOC_TERMINAL_PHASE);
   const transition = (isClosed && !IS_ADMIN)
-   ? `<div class="panel" style="padding:13px;margin:14px 0;border-left:3px solid #475569;background:linear-gradient(180deg,rgba(71,85,105,.07),transparent)">
-        <strong style="font-size:14px">🏢 Transmis au QMS — cycle clôturé</strong>
-        <div class="meta" style="font-size:13px;margin-top:6px">Ce document est parti dans le QMS officiel (via D.O.T). Il n'est plus sous la responsabilité de l'atelier : le circuit documentaire est terminé. Seul un administrateur peut le rouvrir en cas d'erreur.</div>
+   ? `<div class="panel" style="padding:13px;margin:14px 0;border-left:3px solid #9b59b6;background:linear-gradient(180deg,rgba(155,89,182,.08),transparent)">
+        <strong style="font-size:14px">🔬 Revue QA — suivi dans D.O.T / QMS</strong>
+        <div class="meta" style="font-size:13px;margin-top:6px">Ce document est passé en Revue QA : la suite (revue, approbation, QMS officiel) se déroule dans <strong>D.O.T / QMS</strong> (Salesforce). Le circuit de l'atelier est terminé. Seul un administrateur peut le rouvrir si D.O.T le renvoie pour correction.</div>
+        <a href="${DOT_QMS_URL}" target="_blank" rel="noopener" class="btn sm" style="margin-top:10px;border-color:rgba(79,70,229,.3);color:var(--acc);font-weight:700">🏢 Ouvrir D.O.T / QMS ↗</a>
       </div>`
    : !canTransition
    ? `<div class="panel" style="padding:13px;margin:14px 0;border-left:3px solid var(--warn);background:linear-gradient(180deg,rgba(217,119,6,.06),transparent)">
@@ -1944,7 +1951,7 @@ async function openDocDetail(docId){
       </div>`
    : `<div class="panel" style="padding:13px;margin:14px 0;border-left:3px solid var(--acc)">
     <strong style="font-size:14px">➡️ Faire avancer / transférer le document</strong>
-    ${isClosed?'<div class="meta" style="font-size:12px;margin-top:4px;color:var(--warn)">⚠ Document déjà transmis au QMS : tu interviens en tant qu’administrateur (réouverture du cycle).</div>':''}
+    ${isClosed?'<div class="meta" style="font-size:12px;margin-top:4px;color:var(--warn)">⚠ Document déjà en Revue QA (suivi dans D.O.T) : tu interviens en tant qu’administrateur (réouverture du cycle).</div>':''}
     <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:10px">
       <div class="field" style="flex:1;min-width:150px;margin:0"><label style="font-size:11px">Nouvelle phase</label>
         <select id="f_docPhase" class="btn sm" style="width:100%">${phaseOpts}</select></div>

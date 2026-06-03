@@ -209,6 +209,7 @@ function renderTeam(){
   el.innerHTML=state.users.map(u=>{
     const n=state.tasks.filter(t=>t.assignee_id===u.id && t.status!=='done').length;
     const absent=isAbsentNow(u.id);
+    const canTrig=(u.id===ME.id)||IS_ADMIN;   // chacun son trigramme ; admin pour tous
     const onlineDot=u.online?'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#2e9e5b;margin-right:5px;vertical-align:middle" title="En ligne"></span>':'';
     const lastLogin=u.last_login?'Dernière connexion : '+fmtDateTime(u.last_login):'Jamais connecté';
     return `<div class="card"><div class="person"><div class="ava" style="background:${avaColor(u.id)}">${initials(u.name)}</div>
@@ -218,6 +219,8 @@ function renderTeam(){
       <div class="row" style="margin-top:8px"><span class="pill">${n} tâche(s) active(s)</span>
         ${absent?`<span class="pill absent">Absent aujourd&#39;hui</span>`:`<span class="pill ok">Disponible</span>`}
         ${u.role==='admin'?'<span class="pill admin">Admin</span>':u.role==='lead'?'<span class="pill admin">Team Leader</span>':''}
+        <span class="pill" style="background:rgba(79,70,229,.12);color:var(--acc)" title="Trigramme (signature documentaire)">🔖 ${u.trigram?esc(u.trigram):'—'}</span>
+        ${canTrig?`<button class="btn sm ghost" data-set-trigram="${u.id}" style="padding:2px 9px;font-size:11px">${u.trigram?'Modifier trigramme':'Définir trigramme'}</button>`:''}
       </div>
       ${IS_ADMIN?`<div class="row" style="justify-content:flex-end;margin-top:10px;flex-wrap:wrap;gap:5px">
         ${u.email?`<button class="btn sm ghost" data-remind-person="${u.id}">✉ Rappel tâches</button>`:''}
@@ -227,6 +230,23 @@ function renderTeam(){
       </div>`:''}
     </div>`;
   }).join('');
+}
+
+async function setTrigram(uid){
+  const target=state.users.find(x=>x.id===uid);
+  const isMe=uid===ME.id;
+  const cur=(target&&target.trigram)||'';
+  const v=prompt(`Trigramme de ${isMe?'ta signature':esc(target?target.name:'')} (2 à 4 lettres/chiffres, ex : ABS) :`, cur);
+  if(v===null) return;            // annulé
+  const trig=v.trim().toUpperCase();
+  try{
+    if(isMe) await api('/api/me/trigram',{method:'PUT',body:{trigram:trig}});
+    else     await api('/api/users/'+uid,{method:'PUT',body:{trigram:trig}});
+    if(isMe && ME) ME.trigram=trig;        // garde ME à jour pour les validations
+    await loadAll();                       // recharge state.users
+    renderTeam();
+    toast(trig?`🔖 Trigramme enregistré : ${trig}`:'Trigramme vidé');
+  }catch(e){toast(e.message,'err');}
 }
 
 function renderAbsences(){
@@ -1791,7 +1811,7 @@ function renderQMS(docs){
   const band=$('qmsBand');if(!band)return;
   const active=docs.filter(d=>!d.obsolete);
   const slaOver=active.filter(d=>d.sla_over).length;
-  const pendingSign=active.filter(d=>DOC_SIGN_PHASES.includes(d.phase)).length;
+  const inQA=active.filter(d=>d.phase==='revue_qa').length;
   // « lu & compris » dus pour moi (je suis dans la liste de diffusion mais pas encore acquitté)
   const myAckDue=active.filter(d=>d.my_required && !d.my_ack).length;
   // diffusions incomplètes (au moins un lecteur requis n'a pas acquitté)
@@ -1799,7 +1819,7 @@ function renderQMS(docs){
   const obsolete=docs.filter(d=>d.obsolete).length;
   const cards=[
     {n:slaOver,    l:'Hors délai SLA',        ic:'⏳', bad:slaOver>0,   phase:'__sla'},
-    {n:pendingSign,l:'Signatures attendues',  ic:'✒️', bad:false,        phase:'__sign'},
+    {n:inQA,       l:'En Revue QA / D.O.T',   ic:'🔬', bad:false,        phase:'__qa'},
     {n:myAckDue,   l:'Mes « lu & compris »',  ic:'📖', bad:myAckDue>0,  phase:'__myack'},
     {n:distIncomplete,l:'Diffusions en cours',ic:'📤', bad:false,        phase:'__dist'},
     {n:obsolete,   l:'Obsolètes',             ic:'🗑️', bad:false,        phase:'__obs'},
@@ -2002,13 +2022,7 @@ async function openDocDetail(docId){
       </select></div>
     <div class="field" style="margin:8px 0 0"><label style="font-size:11px">Note (optionnel)</label>
       <input id="f_docTransNote" placeholder="Ex : prêt pour relecture QA" style="width:100%;background:var(--panel2);border:1.5px solid var(--line);padding:7px 10px;border-radius:var(--r-sm);outline:none;font-size:13px"></div>
-    <div id="docSignBlock" class="doc-sign-block hidden">
-      <div class="doc-sign-head">🔏 Signature électronique requise — cette action engage ta responsabilité (21 CFR Part 11).</div>
-      <div class="field" style="margin:0 0 8px"><label style="font-size:11px">Motif / signification</label>
-        <input id="f_docSignReason" placeholder="Ex : Document approuvé, conforme aux exigences qualité" style="width:100%;background:#fff;border:1.5px solid var(--line);padding:7px 10px;border-radius:var(--r-sm);outline:none;font-size:13px"></div>
-      <div class="field" style="margin:0"><label style="font-size:11px">Confirme ton mot de passe</label>
-        <input type="password" id="f_docSignPwd" placeholder="••••••••" autocomplete="current-password" style="width:100%;background:#fff;border:1.5px solid var(--line);padding:7px 10px;border-radius:var(--r-sm);outline:none;font-size:13px"></div>
-    </div>
+    <div class="meta" style="font-size:11.5px;margin-top:8px">✒️ En validant, tu signes la transition avec ton trigramme${ME&&ME.trigram?' <strong style="color:var(--acc)">'+esc(ME.trigram)+'</strong>':' (à définir dans Équipe)'}.</div>
     <label class="row" style="gap:6px;margin-top:8px;font-size:13px;cursor:pointer">
       <input type="checkbox" id="f_docNotify" checked> Prévenir la personne par email (ouvre Outlook)
     </label>
@@ -2030,18 +2044,26 @@ async function openDocDetail(docId){
   }).join('');
 
   // ----- Versions -----
-  const versionsHtml=d.versions.map(v=>`
+  const versionsHtml=d.versions.map(v=>{
+    // Seule la dernière version est téléchargeable (les antérieures : admins, audit)
+    const canDl = v.is_latest || IS_ADMIN;
+    const dlBtn = canDl
+      ? `<a class="btn sm ghost" href="/api/documents/${d.id}/versions/${v.id}/download">⬇ Télécharger${(!v.is_latest&&IS_ADMIN)?' (archive)':''}</a>`
+      : `<span class="pill" title="Seule la dernière version est téléchargeable" style="opacity:.7">🔒 archivée</span>`;
+    return `
     <div class="row" style="justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line)">
       <div style="flex:1;min-width:0">
         <div class="row" style="gap:8px;align-items:center">
-          <span class="pill" style="font-weight:700">v${v.version}</span>
-          <strong style="font-size:13px">${esc(v.filename)}</strong>
+          <span class="pill" style="font-weight:700">V${v.version}</span>
+          ${v.signed_trigram?`<span class="pill" style="background:rgba(79,70,229,.12);color:var(--acc);font-size:10px" title="Signé par">🔖 ${esc(v.signed_trigram)}</span>`:''}
+          ${v.is_latest?'<span class="pill ok" style="font-size:10px">à jour</span>':''}
+          <strong style="font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(v.display_name||v.filename)}</strong>
           <span class="meta" style="font-size:11px">${fmtBytes(v.size)}</span>
         </div>
         <div class="meta" style="font-size:12px">Par ${esc(v.uploaded_by_name||'?')} · ${fmtDateTime(v.uploaded_at)}${v.note?' · '+esc(v.note):''}</div>
       </div>
-      <a class="btn sm ghost" href="/api/documents/${d.id}/versions/${v.id}/download">⬇ Télécharger</a>
-    </div>`).join('');
+      ${dlBtn}
+    </div>`;}).join('');
 
   // ----- Signatures électroniques -----
   const sigHtml=(d.signatures||[]).map(sg=>`
@@ -2133,8 +2155,8 @@ async function openDocDetail(docId){
       ${isLockedByMe?`<div class="meta" style="margin-top:8px;font-size:12px">💡 Édite le fichier téléchargé dans Word, puis clique « Uploader nouvelle version ».</div>`:''}
     </div>
 
-    <h3 style="font-size:15px;margin:16px 0 4px">🔏 Signatures électroniques (${(d.signatures||[]).length})</h3>
-    <div style="max-height:160px;overflow:auto">${sigHtml}</div>
+    ${(d.signatures||[]).length?`<h3 style="font-size:15px;margin:16px 0 4px">🔏 Signatures électroniques (${d.signatures.length})</h3>
+    <div style="max-height:160px;overflow:auto">${sigHtml}</div>`:''}
 
     <h3 style="font-size:15px;margin:16px 0 4px">🗂 Historique du workflow</h3>
     <div style="max-height:180px;overflow:auto">${wfHtml||'<div class="empty">Aucune étape</div>'}</div>
@@ -2203,9 +2225,8 @@ async function openDocDetail(docId){
     if(!phaseSel)return;
     const ph=phaseSel.value;
     const isQA=(ph==='revue_qa');                 // revue QA = externe (D.O.T) : pas d'assignation
-    const signBlock=$('docSignBlock'), assigneeField=$('f_docAssigneeField');
+    const assigneeField=$('f_docAssigneeField');
     const actionField=$('f_docActionField'), qaNote=$('f_docQaNote');
-    if(signBlock)signBlock.classList.toggle('hidden',!DOC_SIGN_PHASES.includes(ph));
     if(assigneeField)assigneeField.classList.toggle('hidden',isQA);
     if(qaNote)qaNote.classList.toggle('hidden',!isQA);
     // L'action (Lecture/Rédaction) n'a de sens qu'avec un assigné interne
@@ -2373,7 +2394,7 @@ function renderDocViewerSide(d, cur){
   if(!d.locked_by) actions+=`<button class="btn sm primary" data-doc-lock="${d.id}">🔒 Verrouiller / éditer</button>`;
   else if(isLockedByMe) actions+=`<button class="btn sm primary" id="dvUpload">⬆ Nouvelle version</button><button class="btn sm ghost" data-doc-unlock="${d.id}">Libérer</button>`;
   else actions+=`<span class="pill" style="background:rgba(220,38,38,.12);color:var(--bad)">🔒 ${esc(d.locked_by_name||'?')}</span>${IS_ADMIN?`<button class="btn sm ghost" data-doc-unlock="${d.id}">Forcer (admin)</button>`:''}`;
-  actions+=`<button class="btn sm ghost" id="dvWorkflow">⚙ Workflow & signatures</button>`;
+  actions+=`<button class="btn sm ghost" id="dvWorkflow">⚙ Workflow</button>`;
   const lockMsg=isLockedByMe?'<div class="meta" style="font-size:12px;margin-top:6px">💡 Verrouillé par toi : télécharge, édite dans Word, puis « Nouvelle version ».</div>':'';
   // Historique du document : transitions de workflow + versions, fusionnés et triés
   const hist=[];
@@ -2471,18 +2492,10 @@ async function docTransition(){
     if($('f_docAction'))$('f_docAction').focus();return;
   }
   const body={phase, assigned_to: assigneeVal?parseInt(assigneeVal,10):null, action_type: actionVal, note, notify};
-  // Signature électronique requise pour Approbation / Prêt QMS
-  if(DOC_SIGN_PHASES.includes(phase)){
-    const reason=$('f_docSignReason').value.trim();
-    const pwd=$('f_docSignPwd').value;
-    if(!reason){toast('Indique le motif de la signature.','err');$('f_docSignReason').focus();return;}
-    if(!pwd){toast('Confirme ton mot de passe pour signer.','err');$('f_docSignPwd').focus();return;}
-    body.reason=reason;body.password=pwd;
-  }
   try{
     const r=await api('/api/documents/'+currentDocId+'/transition',{method:'POST',body});
     const actLbl=DOC_ACTION_LABELS[actionVal]||'';
-    toast((DOC_SIGN_PHASES.includes(phase)?'✒️ Signé et déplacé en « ':'Document déplacé en « ')+(ph?ph.label:phase)+' »'+(actLbl&&assigneeVal?' · '+actLbl:''));
+    toast('Document déplacé en « '+(ph?ph.label:phase)+' »'+(actLbl&&assigneeVal?' · '+actLbl:''));
     // Revue QA = externe : on ouvre le portail D.O.T pour y pousser le document
     if(isQA){toast('Ouverture de D.O.T / QMS pour y pousser le document…');window.open(DOT_QMS_URL,'_blank','noopener');}
     // Notification email via Outlook (mailto) — ouvre depuis ton compte
@@ -2900,13 +2913,14 @@ function renderCommentList(comments){
 
 /* ====== Événements ====== */
 document.addEventListener('click',function(e){
-  const t=e.target.closest('[data-tab],[data-close],[data-edit-task],[data-del-task],[data-edit-person],[data-del-person],[data-del-abs],[data-remind],[data-ack],[data-remind-person],[data-remind-login],[data-open-doc],[data-doc-lock],[data-doc-unlock],[data-doc-delete]');
+  const t=e.target.closest('[data-tab],[data-close],[data-edit-task],[data-del-task],[data-edit-person],[data-del-person],[data-set-trigram],[data-del-abs],[data-remind],[data-ack],[data-remind-person],[data-remind-login],[data-open-doc],[data-doc-lock],[data-doc-unlock],[data-doc-delete]');
   if(!t)return;
   if(t.hasAttribute('data-tab'))tab(t.dataset.tab);
   else if(t.hasAttribute('data-close'))closeModal(t.dataset.close);
   else if(t.hasAttribute('data-edit-task'))openTask(t.dataset.editTask);
   else if(t.hasAttribute('data-del-task'))delTask(t.dataset.delTask);
   else if(t.hasAttribute('data-edit-person'))openPerson(t.dataset.editPerson);
+  else if(t.hasAttribute('data-set-trigram'))setTrigram(parseInt(t.dataset.setTrigram,10));
   else if(t.hasAttribute('data-del-person'))delPerson(t.dataset.delPerson);
   else if(t.hasAttribute('data-del-abs'))delAbsence(t.dataset.delAbs);
   else if(t.hasAttribute('data-remind'))remindTask(t.dataset.remind);
@@ -3214,12 +3228,12 @@ const TOUR_STEPS=[
   {sel:'#dvSide .dv-actions', pos:'left', title:'🔒 Verrouiller & éditer', text:"Pour modifier : clique « Verrouiller / éditer ». Tu prends la main (personne d'autre ne peut écrire) et l'app <strong>enregistre une copie de la dernière version dans ton dossier de travail</strong> (un double de sécurité : tu ne perds rien). Tu modifies dans Word, puis tu <strong>ré-uploades</strong> une nouvelle version. C'est le check-out / check-in, comme dans un vrai QMS."},
   {sel:'#dvCommentInput', pos:'top', title:'💬 Commenter', text:"Écris un commentaire visible par toute l'équipe. Tape « @ » pour mentionner quelqu'un — il reçoit une notification."},
   {sel:'#dvPlaceBtn', pos:'top', title:'📍 Commentaire ancré', text:"Tu peux placer un commentaire à un endroit PRÉCIS du document : écris, clique 📍, puis clique dans la page. Une épingle apparaît et le commentaire y est rattaché."},
-  {sel:'#dvWorkflow', pos:'top', title:'⚙ Faire avancer (pousser)', text:"Pour « pousser » le document à la phase suivante, ouvre « Workflow & signatures »."},
+  {sel:'#dvWorkflow', pos:'top', title:'⚙ Faire avancer (pousser)', text:"Pour « pousser » le document à la phase suivante, ouvre « Workflow »."},
   {run:()=>{ closeModal('docViewerModal'); const id=_tourDocId(); if(id) openDocDetail(id); }, sel:'#f_docPhase', pos:'bottom', title:'➡️ Pousser de phase', text:"Le circuit de l'atelier compte 3 phases : <strong>Rédaction → Revue équipe → Revue QA</strong>. Choisis la phase suivante, assigne une personne et précise l'<strong>action attendue</strong> : <strong>📖 Lecture</strong> (relire/vérifier) ou <strong>✍️ Rédaction</strong> (produire/modifier). La personne est notifiée (in-app + email).<br><br>⚠️ Si le document est <strong>chez un collègue</strong>, seul lui (ou un administrateur) peut le faire avancer."},
   {center:true, title:'🔬 La Revue QA part dans D.O.T / QMS', text:"La <strong>Revue QA</strong> est la dernière étape côté atelier : à partir de là, le document passe dans <strong>D.O.T / QMS</strong> (Salesforce), où se font la revue, l'approbation et la signature officielle. Quand tu pousses en Revue QA, <strong>pas d'assignation interne</strong> : le portail <strong>D.O.T s'ouvre automatiquement</strong> pour y déposer le document (un bouton « Ouvrir D.O.T / QMS » reste aussi disponible)."},
   // ----- Suite -----
   {run:()=>{ closeModal('docDetailModal'); closeModal('docViewerModal'); }, sel:'#btnNotif', pos:'bottom', title:'🔔 Notifications', text:"Tu es prévenu ici dès qu'un document ou une tâche t'est assigné, ou qu'on te mentionne."},
-  {sel:'#btnActivity', pos:'bottom', title:"🕑 Fil d'activité", text:"Le pouls du service : les dernières actions de toute l'équipe (projets, tâches, documents, signatures…), avec l'auteur et le moment."},
+  {sel:'#btnActivity', pos:'bottom', title:"🕑 Fil d'activité", text:"Le pouls du service : les dernières actions de toute l'équipe (projets, tâches, documents, validations…), avec l'auteur et le moment."},
   {sel:'#btnGlobalSearch', pos:'bottom', title:'🔍 Recherche & raccourcis', text:"Appuie sur <strong>Ctrl+K</strong> (ou « / ») pour retrouver instantanément un projet, une tâche, un document ou une personne.<br><br>⌨️ Astuce : « <strong>n</strong> » crée une tâche, « <strong>?</strong> » affiche tous les raccourcis, et « <strong>g</strong> » puis une lettre change d'onglet."},
   {sel:'#manualLink', pos:'right', title:'📘 Tout le détail en PowerPoint', text:"Pour aller plus loin, télécharge le manuel utilisateur complet.",
    action:'<a class="btn sm" href="/api/manual.pptx" style="margin-bottom:10px;display:inline-flex">📘 Télécharger le manuel</a>'},
@@ -3310,13 +3324,17 @@ async function showTourStep(){
       </div>
     </div>`;
   if(el && !step.center){
-    const r=el.getBoundingClientRect();const pos=step.pos||'right';const pw=300,ph=pop.offsetHeight||170;
+    const r=el.getBoundingClientRect();const pos=step.pos||'right';
+    // Largeur/hauteur RÉELLES de la popup (sinon débordement à droite)
+    const pw=pop.offsetWidth||400, ph=pop.offsetHeight||170, M=12;
     let left,top;
-    if(pos==='right'){left=r.right+14;top=r.top;}
+    if(pos==='right'){ // bascule à gauche de l'élément s'il n'y a pas la place à droite
+      left=(r.right+14+pw<=window.innerWidth-M)?r.right+14:r.left-pw-14; top=r.top;
+    }
     else if(pos==='top'){left=r.left;top=r.top-ph-14;}
     else {left=r.left;top=r.bottom+14;}
-    left=Math.max(10,Math.min(window.innerWidth-pw-10,left));
-    top=Math.max(10,Math.min(window.innerHeight-ph-10,top));
+    left=Math.max(M,Math.min(window.innerWidth-pw-M,left));
+    top=Math.max(M,Math.min(window.innerHeight-ph-M,top));
     pop.style.left=left+'px';pop.style.top=top+'px';pop.style.transform='none';
   }else{pop.style.left='';pop.style.top='';pop.style.transform='';}
   $('tourNext').onclick=()=>{_tourDir=1;_tourI++;showTourStep();};

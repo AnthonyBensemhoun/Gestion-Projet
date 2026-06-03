@@ -328,6 +328,7 @@
 <script>
 window.CURRENT_USER = {
   id: {{ user.id }}, name: {{ user.name|tojson }}, role: {{ user.role|tojson }},
+  trigram: {{ (user.trigram or '')|tojson }},
   is_admin: {{ 'true' if is_admin else 'false' }},
   can_manage_projects: {{ 'true' if can_manage_projects else 'false' }},
   must_change_password: {{ 'true' if must_change_password else 'false' }}

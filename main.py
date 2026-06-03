@@ -56,6 +56,7 @@ class User(SQLModel, table=True):
     name: str
     password_hash: str
     role: str = "user"   # 'admin' ou 'user'
+    trigram: str = ""    # initiales (ex : ABS) — signature documentaire
     created_at: datetime = Field(default_factory=datetime.utcnow)
     must_change_password: bool = Field(default=False)
     last_login: Optional[datetime] = Field(default=None)
@@ -221,6 +222,7 @@ class DocumentVersion(SQLModel, table=True):
     uploaded_by: Optional[int] = Field(default=None)
     uploaded_at: datetime = Field(default_factory=datetime.utcnow)
     note: str = ""
+    signed_trigram: str = ""   # trigramme du dernier valideur ayant poussé cette version
 
 class AuditLog(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -369,6 +371,10 @@ def on_startup():
              "ALTER TABLE document ADD COLUMN folder VARCHAR DEFAULT ''"),
             ("ALTER TABLE document ADD COLUMN IF NOT EXISTS assigned_action VARCHAR DEFAULT ''",
              "ALTER TABLE document ADD COLUMN assigned_action VARCHAR DEFAULT ''"),
+            ('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS trigram VARCHAR DEFAULT \'\'',
+             "ALTER TABLE user ADD COLUMN trigram VARCHAR DEFAULT ''"),
+            ("ALTER TABLE documentversion ADD COLUMN IF NOT EXISTS signed_trigram VARCHAR DEFAULT ''",
+             "ALTER TABLE documentversion ADD COLUMN signed_trigram VARCHAR DEFAULT ''"),
             ("ALTER TABLE docworkflowevent ADD COLUMN IF NOT EXISTS action_type VARCHAR DEFAULT ''",
              "ALTER TABLE docworkflowevent ADD COLUMN action_type VARCHAR DEFAULT ''"),
         ]
@@ -450,6 +456,7 @@ def logout(request: Request, s: Session = Depends(get_session)):
 @app.get("/api/me")
 def api_me(u: User = Depends(require_user)):
     return {"id": u.id, "name": u.name, "email": u.email, "role": u.role,
+            "trigram": u.trigram or "",
             "can_manage_projects": u.role in ("admin", "lead"),
             "must_change_password": u.must_change_password}
 
@@ -457,6 +464,7 @@ def api_me(u: User = Depends(require_user)):
 def list_users(u: User = Depends(require_user), s: Session = Depends(get_session)):
     now = datetime.utcnow()
     return [{"id": x.id, "name": x.name, "email": x.email, "role": x.role,
+             "trigram": x.trigram or "",
              "last_login": x.last_login.isoformat() if x.last_login else None,
              "online": bool(x.last_seen and (now - x.last_seen).total_seconds() < 900)}
             for x in s.exec(select(User).order_by(User.name)).all()]
@@ -497,6 +505,15 @@ def update_user(uid: int, data: dict, u: User = Depends(require_admin), s: Sessi
         updates["email"] = new_email
     if "role" in data and data["role"] in ("admin", "lead", "user"):
         updates["role"] = data["role"]
+    if "trigram" in data:
+        tg = _clean_trigram(data.get("trigram", ""))
+        if tg and len(tg) < 2:
+            raise HTTPException(400, "Le trigramme doit comporter 2 à 4 lettres/chiffres.")
+        if tg:
+            conflict = s.exec(select(User).where(User.trigram == tg, User.id != uid)).first()
+            if conflict:
+                raise HTTPException(400, f"Le trigramme « {tg} » est déjà utilisé par {conflict.name}.")
+        updates["trigram"] = tg
     if data.get("password"):
         updates["password_hash"] = bcrypt.hash(data["password"])
     if updates:
@@ -1096,6 +1113,27 @@ def get_my_prefs(u: User = Depends(require_user), s: Session = Depends(get_sessi
     try: return json.loads(r.data)
     except Exception: return {}
 
+def _clean_trigram(raw: str) -> str:
+    """Normalise un trigramme : lettres/chiffres, 2 à 4 caractères, en majuscules."""
+    t = re.sub(r"[^A-Za-z0-9]", "", (raw or "")).upper()[:4]
+    return t
+
+@app.put("/api/me/trigram")
+def set_my_trigram(data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
+    t = _clean_trigram(data.get("trigram", ""))
+    if t and len(t) < 2:
+        raise HTTPException(400, "Le trigramme doit comporter 2 à 4 lettres/chiffres (ex : ABS).")
+    # Unicité (utile pour distinguer les signatures)
+    if t:
+        other = s.exec(select(User).where(User.trigram == t, User.id != u.id)).first()
+        if other:
+            raise HTTPException(400, f"Le trigramme « {t} » est déjà utilisé par {other.name}.")
+    obj = s.get(User, u.id)
+    obj.trigram = t
+    s.add(obj); s.commit()
+    _audit(s, u.name, "Trigramme", t or "(vidé)")
+    return {"ok": True, "trigram": t}
+
 @app.put("/api/me/prefs")
 def set_my_prefs(data: dict, u: User = Depends(require_user), s: Session = Depends(get_session)):
     payload = json.dumps(data, ensure_ascii=False)[:50000]
@@ -1388,6 +1426,8 @@ def _doc_dict(s: Session, d: Document, versions=None, me_id=None):
         "last_modified_by": _user_name(s, cur.uploaded_by) if cur else None,
         "last_modified_at": cur.uploaded_at.isoformat() if cur and cur.uploaded_at else None,
         "last_filename": cur.filename if cur else None,
+        "last_display_name": _versioned_filename(d, cur) if cur else None,
+        "last_trigram": (cur.signed_trigram or "") if cur else "",
         "sign_count": sign_count,
         "ack_count": len(acks), "my_ack": my_ack,
         "needs_ack": phase == "pret_qms",
@@ -1406,8 +1446,12 @@ def get_document(doc_id: int, u: User = Depends(require_user), s: Session = Depe
     versions = s.exec(select(DocumentVersion).where(DocumentVersion.document_id == doc_id)
                      .order_by(DocumentVersion.version.desc())).all()
     out = _doc_dict(s, d, versions, me_id=u.id)
+    latest_vid = versions[0].id if versions else None
     out["versions"] = [{
         "id": v.id, "version": v.version, "filename": v.filename,
+        "display_name": _versioned_filename(d, v),
+        "signed_trigram": v.signed_trigram or "",
+        "is_latest": v.id == latest_vid,
         "size": v.size, "note": v.note,
         "uploaded_by_name": _user_name(s, v.uploaded_by),
         "uploaded_at": v.uploaded_at.isoformat() if v.uploaded_at else None,
@@ -1471,6 +1515,10 @@ def transition_document(doc_id: int, data: dict, u: User = Depends(require_user)
     phase = data.get("phase")
     if phase not in DOC_PHASES:
         raise HTTPException(400, "Phase invalide")
+    # Le valideur « signe » la transition avec son trigramme : il doit en avoir un.
+    trig = (u.trigram or "").strip()
+    if not trig:
+        raise HTTPException(400, "Définis ton trigramme dans la section Équipe avant de valider un document.")
     assigned_to = data.get("assigned_to")
     if assigned_to:
         if not s.get(User, assigned_to):
@@ -1503,10 +1551,18 @@ def transition_document(doc_id: int, data: dict, u: User = Depends(require_user)
                            phase=phase, meaning=phase_lbl, reason=reason,
                            version=cur.version if cur else 0))
         _audit(s, u.name, "Signature électronique", f"{d.name} — {phase_lbl} : {reason}")
+    # Pousser le document = passer la main : on libère le verrou (check-in) pour que
+    # la personne assignée puisse à son tour le verrouiller et uploader sa version.
     s.execute(sa_update(Document).where(Document.id == doc_id).values(
         phase=phase, assigned_to=assigned_to, assigned_action=action_type,
-        phase_since=datetime.utcnow(),
+        phase_since=datetime.utcnow(), locked_by=None, locked_at=None,
         status=DOC_PHASE_STATUS.get(phase, d.status)))
+    # Signature trigramme : on tamponne la version courante (apparaît dans le nom de fichier).
+    cur_v = s.exec(select(DocumentVersion).where(DocumentVersion.document_id == doc_id)
+                   .order_by(DocumentVersion.version.desc())).first()
+    if cur_v:
+        cur_v.signed_trigram = trig
+        s.add(cur_v)
     s.add(DocWorkflowEvent(document_id=doc_id, phase=phase, assigned_to=assigned_to,
                            action_type=action_type, moved_by=u.id, note=note))
     action_lbl = DOC_ACTION_LABELS.get(action_type, "")
@@ -1668,13 +1724,33 @@ async def upload_version(
     s.commit()
     return _doc_dict(s, s.get(Document, doc_id))
 
+def _versioned_filename(doc: Document, v: DocumentVersion) -> str:
+    """Nom de fichier normalisé : Nom_TRIGRAMME_Vn.ext (trigramme du valideur)."""
+    base = re.sub(r'[\\/:*?"<>|]+', "", (doc.name if doc else "") or "document").strip() or "document"
+    ext = ""
+    if v.filename and "." in v.filename:
+        ext = "." + v.filename.rsplit(".", 1)[-1]
+    parts = [base]
+    if (v.signed_trigram or "").strip():
+        parts.append(v.signed_trigram.strip())
+    parts.append(f"V{v.version}")
+    return "_".join(parts) + ext
+
 @app.get("/api/documents/{doc_id}/versions/{ver_id}/download")
 def download_version(doc_id: int, ver_id: int,
                      u: User = Depends(require_user), s: Session = Depends(get_session)):
     v = s.get(DocumentVersion, ver_id)
     if not v or v.document_id != doc_id:
         raise HTTPException(404, "Version introuvable")
-    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{_urlquote(v.filename)}"}
+    latest = s.exec(select(DocumentVersion).where(DocumentVersion.document_id == doc_id)
+                    .order_by(DocumentVersion.version.desc())).first()
+    # Toujours la dernière version : les antérieures sont réservées aux admins (audit).
+    if latest and v.id != latest.id and u.role != "admin":
+        raise HTTPException(403, f"Seule la dernière version (V{latest.version}) peut être récupérée. "
+                                 "Les versions antérieures sont réservées aux administrateurs (audit).")
+    doc = s.get(Document, doc_id)
+    fname = _versioned_filename(doc, v)
+    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{_urlquote(fname)}"}
     return StreamingResponse(io.BytesIO(v.content),
                              media_type=v.mime_type or "application/octet-stream",
                              headers=headers)

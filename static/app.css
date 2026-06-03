@@ -1,13 +1,13 @@
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
 
 :root {
-  --bg:#f6f8fb; --panel:#ffffff; --panel2:#f1f5f9; --line:#e6ebf2;
-  --ink:#1e293b; --mut:#697586; --acc:#4f46e5; --acc-d:#4338ca; --acc2:#14b8a6;
+  --bg:#f7f8fa; --panel:#ffffff; --panel2:#f3f4f7; --line:#e9ebf0;
+  --ink:#16202e; --mut:#6b7686; --acc:#4f46e5; --acc-d:#4338ca; --acc2:#14b8a6;
   --ok:#16a34a; --warn:#d97706; --bad:#dc2626; --info:#2563eb;
-  --shadow-sm:0 1px 2px rgba(30,41,59,.06),0 1px 3px rgba(30,41,59,.05);
-  --shadow:0 6px 20px rgba(30,41,59,.08),0 2px 6px rgba(30,41,59,.05);
-  --shadow-lg:0 20px 50px rgba(30,41,59,.16),0 6px 16px rgba(30,41,59,.08);
-  --shadow-acc:0 8px 22px rgba(79,70,229,.30);
+  --shadow-sm:0 1px 2px rgba(16,24,40,.04),0 1px 1px rgba(16,24,40,.03);
+  --shadow:0 4px 14px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.04);
+  --shadow-lg:0 18px 44px rgba(16,24,40,.12),0 4px 12px rgba(16,24,40,.06);
+  --shadow-acc:0 6px 18px rgba(79,70,229,.22);
   --t-fast:130ms ease; --t-med:220ms ease;
   --t-smooth:350ms cubic-bezier(.4,0,.2,1);
   --r-sm:9px; --r-md:13px; --r-lg:16px; --r-xl:20px;
@@ -17,8 +17,8 @@
 body{
   margin:0;
   background:
-    radial-gradient(1100px 560px at 92% -14%,rgba(79,70,229,.07),transparent 60%),
-    radial-gradient(820px 480px at -8% 112%,rgba(20,184,166,.06),transparent 55%),
+    radial-gradient(900px 480px at 95% -18%,rgba(79,70,229,.040),transparent 60%),
+    radial-gradient(700px 420px at -10% 115%,rgba(20,184,166,.030),transparent 55%),
     var(--bg);
   color:var(--ink);font-family:'Inter',system-ui,sans-serif;min-height:100vh;
   -webkit-font-smoothing:antialiased;
@@ -43,10 +43,10 @@ kbd{font-family:'Space Grotesk',monospace;font-size:10px;background:var(--panel2
 .btn:hover{border-color:var(--acc);transform:translateY(-1px);box-shadow:var(--shadow-sm)}
 .btn:active{transform:translateY(0) scale(.98);box-shadow:none}
 .btn.primary{
-  background:linear-gradient(160deg,var(--acc),#c84d1c);
+  background:linear-gradient(160deg,#6366f1,var(--acc));
   border-color:transparent;color:#fff;box-shadow:var(--shadow-acc);
 }
-.btn.primary:hover{filter:brightness(1.06);box-shadow:0 10px 30px rgba(79,70,229,.38)}
+.btn.primary:hover{filter:brightness(1.05);box-shadow:0 8px 22px rgba(79,70,229,.30)}
 .btn.ghost{background:transparent}
 .btn.ghost:hover{background:var(--panel2)}
 .btn.sm{padding:5px 11px;font-size:12px;border-radius:7px}
